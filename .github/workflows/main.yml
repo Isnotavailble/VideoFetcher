@@ -22,12 +22,9 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      # IMPORTANT: Ensure the gradlew file is executable
-      - name: Make Gradlew Executable
-        run: chmod +x gradlew
-
+      # We reverted this back to 'gradle' instead of './gradlew'
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        run: gradle assembleDebug
 
       - name: Upload Split APKs
         uses: actions/upload-artifact@v4
