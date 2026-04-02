@@ -14,4 +14,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "VideoFetcher"
-include(":app")\n
+include(":app")
