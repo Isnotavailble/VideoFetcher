@@ -30,10 +30,18 @@ android {
         abi {
             isEnable = true
             reset()
-            // Creates separate APKs for modern, older, and emulator architectures
-            //include("arm64-v8a", "armeabi-v7a", "x86_64")
+            // ONLY build the 64-bit version to save data and build time
             include("arm64-v8a")
             isUniversalApk = false // Prevents the creation of the massive 200MB file
+        }
+    }
+
+    // =========================================================
+    // NEW: Resolves the "extractNativeLibs" conflict with Gradle
+    // =========================================================
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 
