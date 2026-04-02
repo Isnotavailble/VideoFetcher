@@ -16,7 +16,6 @@ class MainActivity : ComponentActivity() {
         
         try {
             com.yausername.youtubedl_android.YoutubeDL.getInstance().init(applicationContext)
-            com.yausername.youtubedl_android.YoutubeDL.getInstance().updateYoutubeDL(applicationContext, com.yausername.youtubedl_android.YoutubeDL.UpdateChannel.STABLE)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -31,6 +30,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VideoDownloaderUI() {
     var url by remember { mutableStateOf("") }
@@ -74,7 +74,7 @@ fun VideoDownloaderUI() {
         Spacer(modifier = Modifier.height(32.dp))
 
         Button(
-            onClick = { statusText = "Downloading \$selectedQuality..." },
+            onClick = { statusText = "Downloading $selectedQuality..." },
             modifier = Modifier.fillMaxWidth().height(50.dp)
         ) {
             Text("DOWNLOAD")
