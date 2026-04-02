@@ -30,6 +30,6 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
     
-    implementation("com.github.yausername.youtubedl-android:library:0.16.2")
-    implementation("com.github.yausername.youtubedl-android:ffmpeg:0.16.2")
+    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
 }
