@@ -20,7 +20,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
-import com.yausername.ffmpeg.FFmpeg // Added FFmpeg import
+import com.yausername.ffmpeg.FFmpeg 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,7 +32,7 @@ import java.io.File
 // 1. STATE MANAGEMENT
 // ==========================================
 sealed class DownloadState {
-    object Initializing : DownloadState() // New state for boot up
+    object Initializing : DownloadState()
     object Idle : DownloadState()
     data class Downloading(val progress: Float, val status: String) : DownloadState()
     data class Success(val fileName: String) : DownloadState()
@@ -46,12 +46,11 @@ class DownloaderViewModel : ViewModel() {
     private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Initializing)
     val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
 
-    // Safely initialize libraries in the background
     fun initializeEngine(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 YoutubeDL.getInstance().init(context)
-                FFmpeg.getInstance().init(context) // Initialize FFmpeg engine
+                FFmpeg.getInstance().init(context) 
                 _downloadState.value = DownloadState.Idle
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -70,26 +69,39 @@ class DownloaderViewModel : ViewModel() {
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Point directly to the public Android Downloads folder (No sub-folder creation)
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-
                 val request = YoutubeDLRequest(url)
                 val resolution = quality.replace("p", "")
                 
-                // Ask for the specific video/audio format
+                // 1. Target specific resolution and best audio
                 request.addOption("-f", "bestvideo[height<=$resolution]+bestaudio/best")
                 
-                // Save directly into the Downloads directory
+                // 2. Force FFmpeg to output as an MP4 container
+                request.addOption("--merge-output-format", "mp4")
+
+                // 3. Clean the filename of emojis or illegal characters to prevent OS errors
+                request.addOption("--restrict-filenames")
+                
+                // 4. Set the output path
                 request.addOption("-o", "${downloadsDir.absolutePath}/%(title)s.%(ext)s")
 
-                YoutubeDL.getInstance().execute(request, "downloader_process") { progress, etaInSeconds, _ ->
+                YoutubeDL.getInstance().execute(request, "downloader_process") { progress, etaInSeconds, line ->
+                    // Detect if the terminal output indicates FFmpeg has started merging
+                    val isConverting = line.contains("[ffmpeg]") || line.contains("Merging") || progress >= 100f
+                    
+                    val currentStatus = if (isConverting) {
+                        "Converting & Merging to MP4... Please wait"
+                    } else {
+                        "Downloading: ${String.format("%.1f", progress)}% (ETA: ${etaInSeconds}s)"
+                    }
+
                     _downloadState.value = DownloadState.Downloading(
-                        progress = progress / 100f,
-                        status = "Downloading: ${String.format("%.1f", progress)}% (ETA: ${etaInSeconds}s)"
+                        progress = if (isConverting) 1f else (progress / 100f),
+                        status = currentStatus
                     )
                 }
 
-                _downloadState.value = DownloadState.Success("Video saved to your Downloads folder!")
+                _downloadState.value = DownloadState.Success("Video successfully saved as MP4!")
 
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -131,7 +143,6 @@ fun VideoDownloaderUI(viewModel: DownloaderViewModel = viewModel()) {
     var selectedQuality by remember { mutableStateOf("1080p") }
     val state by viewModel.downloadState.collectAsState()
 
-    // Boot up the engine when the UI first loads
     LaunchedEffect(Unit) {
         viewModel.initializeEngine(context.applicationContext)
     }
@@ -179,7 +190,6 @@ fun VideoDownloaderUI(viewModel: DownloaderViewModel = viewModel()) {
                 Button(
                     onClick = { viewModel.startDownload(url, selectedQuality) },
                     modifier = Modifier.fillMaxWidth().height(50.dp),
-                    // Disable button if initializing, downloading, or if URL is blank
                     enabled = (state is DownloadState.Idle || state is DownloadState.Success || state is DownloadState.Error) && url.isNotBlank()
                 ) {
                     Text(
