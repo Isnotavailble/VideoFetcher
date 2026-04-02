@@ -20,6 +20,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
+import com.yausername.ffmpeg.FFmpeg // Added FFmpeg import
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +32,7 @@ import java.io.File
 // 1. STATE MANAGEMENT
 // ==========================================
 sealed class DownloadState {
+    object Initializing : DownloadState() // New state for boot up
     object Idle : DownloadState()
     data class Downloading(val progress: Float, val status: String) : DownloadState()
     data class Success(val fileName: String) : DownloadState()
@@ -41,10 +43,24 @@ sealed class DownloadState {
 // 2. VIEWMODEL (BACKGROUND LOGIC)
 // ==========================================
 class DownloaderViewModel : ViewModel() {
-    private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Initializing)
     val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
 
-    fun startDownload(context: Context, url: String, quality: String) {
+    // Safely initialize libraries in the background
+    fun initializeEngine(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                YoutubeDL.getInstance().init(context)
+                FFmpeg.getInstance().init(context) // Initialize FFmpeg engine
+                _downloadState.value = DownloadState.Idle
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _downloadState.value = DownloadState.Error("Engine failed to boot: ${e.message}")
+            }
+        }
+    }
+
+    fun startDownload(url: String, quality: String) {
         if (url.isBlank()) {
             _downloadState.value = DownloadState.Error("URL cannot be empty")
             return
@@ -54,15 +70,17 @@ class DownloaderViewModel : ViewModel() {
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Point to the public Android Downloads folder
+                // Point directly to the public Android Downloads folder (No sub-folder creation)
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val appFolder = File(downloadsDir, "VideoFetcher")
-                if (!appFolder.exists()) appFolder.mkdir()
 
                 val request = YoutubeDLRequest(url)
                 val resolution = quality.replace("p", "")
+                
+                // Ask for the specific video/audio format
                 request.addOption("-f", "bestvideo[height<=$resolution]+bestaudio/best")
-                request.addOption("-o", "${appFolder.absolutePath}/%(title)s.%(ext)s")
+                
+                // Save directly into the Downloads directory
+                request.addOption("-o", "${downloadsDir.absolutePath}/%(title)s.%(ext)s")
 
                 YoutubeDL.getInstance().execute(request, "downloader_process") { progress, etaInSeconds, _ ->
                     _downloadState.value = DownloadState.Downloading(
@@ -71,7 +89,7 @@ class DownloaderViewModel : ViewModel() {
                     )
                 }
 
-                _downloadState.value = DownloadState.Success("Saved to Downloads/VideoFetcher")
+                _downloadState.value = DownloadState.Success("Video saved to your Downloads folder!")
 
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -92,13 +110,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Initialize the library
-        try {
-            YoutubeDL.getInstance().init(applicationContext)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -119,6 +130,11 @@ fun VideoDownloaderUI(viewModel: DownloaderViewModel = viewModel()) {
     var url by remember { mutableStateOf("") }
     var selectedQuality by remember { mutableStateOf("1080p") }
     val state by viewModel.downloadState.collectAsState()
+
+    // Boot up the engine when the UI first loads
+    LaunchedEffect(Unit) {
+        viewModel.initializeEngine(context.applicationContext)
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -142,7 +158,7 @@ fun VideoDownloaderUI(viewModel: DownloaderViewModel = viewModel()) {
                     label = { Text("Paste Video URL") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    enabled = state !is DownloadState.Downloading
+                    enabled = state is DownloadState.Idle || state is DownloadState.Success || state is DownloadState.Error
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -153,7 +169,7 @@ fun VideoDownloaderUI(viewModel: DownloaderViewModel = viewModel()) {
                             selected = selectedQuality == quality,
                             onClick = { selectedQuality = quality },
                             label = { Text(quality) },
-                            enabled = state !is DownloadState.Downloading
+                            enabled = state is DownloadState.Idle || state is DownloadState.Success || state is DownloadState.Error
                         )
                     }
                 }
@@ -161,11 +177,18 @@ fun VideoDownloaderUI(viewModel: DownloaderViewModel = viewModel()) {
                 Spacer(modifier = Modifier.height(24.dp))
 
                 Button(
-                    onClick = { viewModel.startDownload(context, url, selectedQuality) },
+                    onClick = { viewModel.startDownload(url, selectedQuality) },
                     modifier = Modifier.fillMaxWidth().height(50.dp),
-                    enabled = state !is DownloadState.Downloading && url.isNotBlank()
+                    // Disable button if initializing, downloading, or if URL is blank
+                    enabled = (state is DownloadState.Idle || state is DownloadState.Success || state is DownloadState.Error) && url.isNotBlank()
                 ) {
-                    Text(if (state is DownloadState.Downloading) "DOWNLOADING..." else "DOWNLOAD")
+                    Text(
+                        when (state) {
+                            is DownloadState.Initializing -> "INITIALIZING ENGINE..."
+                            is DownloadState.Downloading -> "DOWNLOADING..."
+                            else -> "DOWNLOAD"
+                        }
+                    )
                 }
             }
         }
@@ -173,6 +196,11 @@ fun VideoDownloaderUI(viewModel: DownloaderViewModel = viewModel()) {
         Spacer(modifier = Modifier.height(24.dp))
 
         when (state) {
+            is DownloadState.Initializing -> {
+                CircularProgressIndicator()
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Extracting libraries...", style = MaterialTheme.typography.bodyMedium)
+            }
             is DownloadState.Idle -> { }
             is DownloadState.Downloading -> {
                 val downloadState = state as DownloadState.Downloading
