@@ -23,6 +23,19 @@ android {
         versionName = "1.0"
     }
 
+    // =========================================================
+    // NEW: ABI Splitting (Reduces APK size from ~200MB to ~50MB)
+    // =========================================================
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            // Creates separate APKs for modern, older, and emulator architectures
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = false // Prevents the creation of the massive 200MB file
+        }
+    }
+
     buildFeatures {
         compose = true
     }
@@ -38,6 +51,12 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
     
+    // =========================================================
+    // NEW: Required for the DownloaderViewModel and State Management
+    // =========================================================
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    
+    // YoutubeDL and FFmpeg dependencies
     implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
     implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
 }
