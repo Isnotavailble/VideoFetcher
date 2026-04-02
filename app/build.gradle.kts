@@ -32,4 +32,4 @@ dependencies {
     
     implementation("com.github.yausername.youtubedl-android:library:0.16.2")
     implementation("com.github.yausername.youtubedl-android:ffmpeg:0.16.2")
-}\n
+}

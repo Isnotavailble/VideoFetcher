@@ -84,4 +84,4 @@ fun VideoDownloaderUI() {
         
         Text(text = statusText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
     }
-}\n
+}
