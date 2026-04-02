@@ -31,7 +31,8 @@ android {
             isEnable = true
             reset()
             // Creates separate APKs for modern, older, and emulator architectures
-            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            //include("arm64-v8a", "armeabi-v7a", "x86_64")
+            include("arm64-v8a")
             isUniversalApk = false // Prevents the creation of the massive 200MB file
         }
     }
