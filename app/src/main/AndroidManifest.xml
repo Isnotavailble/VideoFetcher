@@ -2,13 +2,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     
     <uses-permission android:name="android.permission.INTERNET" />
-    
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
 
     <application
         android:allowBackup="true"
         android:label="Video Fetcher"
+        android:extractNativeLibs="true" 
         android:theme="@android:style/Theme.NoTitleBar">
+        
         <activity
             android:name=".MainActivity"
             android:exported="true">
