@@ -1,10 +1,3 @@
-Here is your fully updated **`VideoDownloaderScreen.kt`**. 
-
-I have added the necessary imports at the top and integrated the `rememberLauncherForActivityResult` inside your UI composable so that it automatically requests the correct storage permissions (handling both older Android versions and Android 13+) when the app opens.
-
-You can copy and replace your entire `VideoDownloaderScreen.kt` file with this:
-
-```kotlin
 package com.videofetcher
 
 import android.Manifest
@@ -438,4 +431,3 @@ fun ErrorCard(message: String) {
         }
     }
 }
-```
