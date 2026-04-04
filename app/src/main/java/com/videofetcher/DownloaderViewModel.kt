@@ -12,6 +12,7 @@ import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,8 +36,6 @@ class DownloaderViewModel : ViewModel() {
                 YoutubeDL.getInstance().init(context)
                 FFmpeg.getInstance().init(context)
                 _downloadState.value = DownloadState.Idle
-                // REMOVED fetchDownloadedFiles() here. 
-                // It is now called by the UI *after* permissions are granted.
             } catch (e: Exception) {
                 e.printStackTrace()
                 _downloadState.value = DownloadState.Error("Engine failed to boot: ${e.message}")
@@ -44,7 +43,7 @@ class DownloaderViewModel : ViewModel() {
         }
     }
 
-    fun startDownload(url: String, quality: String,context: Context) {
+    fun startDownload(url: String, quality: String, context: Context) {
         if (url.isBlank()) {
             _downloadState.value = DownloadState.Error("URL cannot be empty")
             return
@@ -75,7 +74,6 @@ class DownloaderViewModel : ViewModel() {
                 request.addOption("--restrict-filenames")
                 
                 // Saves as: /path/Video_Title_(1080p).mp4 
-                // (youtube-dl replaces spaces with underscores due to --restrict-filenames)
                 request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}.%(ext)s")
 
                 YoutubeDL.getInstance().execute(request, "downloader_process") { progress, etaInSeconds, line ->
@@ -96,8 +94,8 @@ class DownloaderViewModel : ViewModel() {
                 // Check if it was manually cancelled
                 if (_downloadState.value !is DownloadState.Cancelled) {
                     _downloadState.value = DownloadState.Success("Video successfully saved!")
-                    // Refresh files list after success
-                    fetchDownloadedFiles(null)
+                    // FIXED: Pass the context so it can actually find the thumbnails folder
+                    fetchDownloadedFiles(context)
                 }
                 
             } catch (e: Exception) {
@@ -124,7 +122,6 @@ class DownloaderViewModel : ViewModel() {
     fun fetchDownloadedFiles(context: Context?) {
         _filesListState.value = FilesListState.Fetching
         viewModelScope.launch(Dispatchers.IO) {
-            val retriever = MediaMetadataRetriever()
             try {
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                 val targetDir = File(downloadsDir, baseDirName)
@@ -140,7 +137,6 @@ class DownloaderViewModel : ViewModel() {
 
                 val fileDetailsList = ArrayList<DownloadedFileDetails>()
                 
-                // FIXED: Use the standard cache directory so it doesn't permanently bloat the user's phone
                 val thumbCacheDir = File(context?.cacheDir, "thumbnails")
                 if (!thumbCacheDir.exists()) {
                     thumbCacheDir.mkdirs()
@@ -153,23 +149,39 @@ class DownloaderViewModel : ViewModel() {
                     var duration = "00:00"
 
                     var thumbnailUri = Uri.EMPTY
+                    val thumbFile = File(thumbCacheDir, "${fileName}.png")
+                    
+                    if (thumbFile.exists()) {
+                        thumbnailUri = Uri.fromFile(thumbFile)
+                    }
+
+                    // FIXED: A fresh retriever created INSIDE the loop so one file doesn't crash the rest
+                    val retriever = MediaMetadataRetriever()
                     try {
-                        // FIXED: Use FileInputStream to safely read the file on Android 10+
-                        FileInputStream(file).use { fis ->
-                            retriever.setDataSource(fis.fd)
+                        // SMART SYNC POLLING: Wait for FFmpeg to unlock the file
+                        var fileReadable = false
+                        var attempts = 0
+                        while (!fileReadable && attempts < 10) {
+                            try {
+                                FileInputStream(file).use { fis ->
+                                    retriever.setDataSource(fis.fd)
+                                }
+                                fileReadable = true
+                            } catch (e: Exception) {
+                                attempts++
+                                if (attempts < 10) {
+                                    delay(500)
+                                } else {
+                                    throw Exception("File locked after 5 seconds")
+                                }
+                            }
                         }
 
                         duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.let {
                             formatDuration(it.toLong())
                         } ?: "00:00"
-
-                        val thumbFile = File(thumbCacheDir, "${fileName}.png")
                         
-                        if (thumbFile.exists()) {
-                            // FIXED: Use a direct local file URI instead of the complex FileProvider
-                            thumbnailUri = Uri.fromFile(thumbFile)
-                        } else {
-                            // Try to grab a frame from the middle of the video instead of the first millisecond (often black)
+                        if (!thumbFile.exists()) {
                             val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
                             val timeUs = if (durationMs > 2000) (durationMs / 2) * 1000 else 1000000L
                             
@@ -178,12 +190,15 @@ class DownloaderViewModel : ViewModel() {
                                 FileOutputStream(thumbFile).use { out ->
                                     bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
                                 }
-                                // FIXED: Use direct local file URI
                                 thumbnailUri = Uri.fromFile(thumbFile)
                             }
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
+                    } finally {
+                        try {
+                            retriever.release()
+                        } catch (e: Exception) {}
                     }
 
                     fileDetailsList.add(
@@ -201,12 +216,6 @@ class DownloaderViewModel : ViewModel() {
             } catch (e: Exception) {
                 e.printStackTrace()
                 _filesListState.value = FilesListState.Error("Failed to scan directory: ${e.message}")
-            } finally {
-                try {
-                    retriever.release()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
             }
         }
     }
@@ -218,14 +227,11 @@ class DownloaderViewModel : ViewModel() {
         
         val nameWithoutExt = fileName.substring(0, lastIndex)
         
-        // Looks for an underscore or space followed by (digits + optional p)
-        // e.g., Title_(1080p) or Title (1080p)
         val signatureRegex = """(.*)[\s_](\(\d+p?\))""".toRegex()
         val matchResult = signatureRegex.find(nameWithoutExt)
         
         return if (matchResult != null) {
             val (title, signature) = matchResult.destructured
-            // Replaces youtube-dl formatting underscores back into spaces
             title.replace("_", " ") to signature
         } else {
             nameWithoutExt.replace("_", " ") to "(MP4)"
