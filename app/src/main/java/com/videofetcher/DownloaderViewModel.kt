@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 
 class DownloaderViewModel : ViewModel() {
@@ -34,8 +35,8 @@ class DownloaderViewModel : ViewModel() {
                 YoutubeDL.getInstance().init(context)
                 FFmpeg.getInstance().init(context)
                 _downloadState.value = DownloadState.Idle
-                // Fetch existing downloaded files on boot
-                fetchDownloadedFiles(context.applicationContext)
+                // REMOVED fetchDownloadedFiles() here. 
+                // It is now called by the UI *after* permissions are granted.
             } catch (e: Exception) {
                 e.printStackTrace()
                 _downloadState.value = DownloadState.Error("Engine failed to boot: ${e.message}")
@@ -153,7 +154,11 @@ class DownloaderViewModel : ViewModel() {
 
                     var thumbnailUri = Uri.EMPTY
                     try {
-                        retriever.setDataSource(file.absolutePath)
+                        // FIXED: Use FileInputStream to safely read the file on Android 10+
+                        FileInputStream(file).use { fis ->
+                            retriever.setDataSource(fis.fd)
+                        }
+
                         duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.let {
                             formatDuration(it.toLong())
                         } ?: "00:00"
@@ -206,7 +211,7 @@ class DownloaderViewModel : ViewModel() {
         }
     }
     
-    // NEW PARSING LOGIC: Extracts clean title and (Resolution)
+    // PARSING LOGIC: Extracts clean title and (Resolution)
     private fun parseFileName(fileName: String): Pair<String, String> {
         val lastIndex = fileName.lastIndexOf('.')
         if (lastIndex == -1) return fileName to "(MP4)"

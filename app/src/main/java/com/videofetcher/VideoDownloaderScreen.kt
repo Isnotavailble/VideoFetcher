@@ -1,6 +1,17 @@
+Here is your fully updated **`VideoDownloaderScreen.kt`**. 
+
+I have added the necessary imports at the top and integrated the `rememberLauncherForActivityResult` inside your UI composable so that it automatically requests the correct storage permissions (handling both older Android versions and Android 13+) when the app opens.
+
+You can copy and replace your entire `VideoDownloaderScreen.kt` file with this:
+
+```kotlin
 package com.videofetcher
 
+import android.Manifest
+import android.os.Build
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -47,8 +58,28 @@ fun VideoDownloaderUI(
         }
     }
 
+    // Permission Launcher to request access to existing files
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        // Once the user answers the permission prompt, fetch the files
+        viewModel.fetchDownloadedFiles(context.applicationContext)
+    }
+
     LaunchedEffect(Unit) {
         viewModel.initializeEngine(context.applicationContext)
+        
+        // Determine which permissions to ask for based on Android version
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.READ_MEDIA_VIDEO)
+        } else {
+            arrayOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            )
+        }
+        // Trigger the popup
+        permissionLauncher.launch(permissions)
     }
 
     val isReady = state !is DownloadState.Initializing
@@ -126,7 +157,7 @@ fun VideoDownloaderUI(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- NEW: LAZY COLUMN PLACED IN THE EMPTY MIDDLE SPACE ---
+        // --- LAZY COLUMN PLACED IN THE EMPTY MIDDLE SPACE ---
         LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
@@ -407,3 +438,4 @@ fun ErrorCard(message: String) {
         }
     }
 }
+```
