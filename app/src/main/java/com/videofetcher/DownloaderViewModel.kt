@@ -1,7 +1,11 @@
 package com.videofetcher
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.os.Environment
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.yausername.ffmpeg.FFmpeg
@@ -12,12 +16,19 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileOutputStream
+import java.util.*
+import kotlin.collections.ArrayList
 
 class DownloaderViewModel : ViewModel() {
     private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Initializing)
     val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
 
-    private val processId = "downloader_process"
+    private val _filesListState = MutableStateFlow<FilesListState>(FilesListState.Idle)
+    val filesListState: StateFlow<FilesListState> = _filesListState.asStateFlow()
+
+    private val baseDirName = "VideoFetcher"
 
     fun initializeEngine(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -25,6 +36,8 @@ class DownloaderViewModel : ViewModel() {
                 YoutubeDL.getInstance().init(context)
                 FFmpeg.getInstance().init(context)
                 _downloadState.value = DownloadState.Idle
+                // Fetch existing downloaded files on boot
+                fetchDownloadedFiles(context.applicationContext)
             } catch (e: Exception) {
                 e.printStackTrace()
                 _downloadState.value = DownloadState.Error("Engine failed to boot: ${e.message}")
@@ -43,15 +56,29 @@ class DownloaderViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                
+                // Target: Downloads/VideoFetcher
+                val targetDir = File(downloadsDir, baseDirName)
+                if (!targetDir.exists()) {
+                    if (!targetDir.mkdirs()) {
+                        throw Exception("Could not create target directory: ${targetDir.absolutePath}")
+                    }
+                }
+
                 val request = YoutubeDLRequest(url)
                 val resolution = quality.replace("p", "")
+                
+                // Resolution signature format like "(1080)"
+                val resolutionSignature = "(${resolution})"
 
                 request.addOption("-f", "bestvideo[height<=$resolution]+bestaudio/best")
                 request.addOption("--merge-output-format", "mp4")
                 request.addOption("--restrict-filenames")
-                request.addOption("-o", "${downloadsDir.absolutePath}/%(title)s.%(ext)s")
+                
+                // Naming scheme with signature: /path/title_reel(1080).mp4
+                request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}.%(ext)s")
 
-                YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
+                YoutubeDL.getInstance().execute(request, "downloader_process") { progress, etaInSeconds, line ->
                     val isConverting = line.contains("[ffmpeg]") || line.contains("Merging") || progress >= 100f
 
                     val currentStatus = if (isConverting) {
@@ -66,10 +93,13 @@ class DownloaderViewModel : ViewModel() {
                     )
                 }
 
-                // Check if it was cancelled manually
+                // Check if it was manually cancelled
                 if (_downloadState.value !is DownloadState.Cancelled) {
-                    _downloadState.value = DownloadState.Success("Video successfully saved!")
+                    _downloadState.value = DownloadState.Success("Video successfully saved as MP4!")
+                    // Refresh files list after success
+                    fetchDownloadedFiles(null)
                 }
+                
             } catch (e: Exception) {
                 if (e.message?.contains("Process destroyed") == true) {
                     _downloadState.value = DownloadState.Cancelled
@@ -83,11 +113,130 @@ class DownloaderViewModel : ViewModel() {
     fun cancelDownload() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                YoutubeDL.getInstance().destroyProcessById(processId)
+                YoutubeDL.getInstance().destroyProcessById("downloader_process")
                 _downloadState.value = DownloadState.Cancelled
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+        }
+    }
+
+    fun fetchDownloadedFiles(context: Context?) {
+        _filesListState.value = FilesListState.Fetching
+        viewModelScope.launch(Dispatchers.IO) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val targetDir = File(downloadsDir, baseDirName)
+                
+                if (!targetDir.exists()) {
+                    _filesListState.value = FilesListState.Success(emptyList())
+                    return@launch
+                }
+
+                val files = targetDir.listFiles { file ->
+                    file.isFile && file.name.endsWith(".mp4", ignoreCase = true)
+                } ?: emptyArray()
+
+                val fileDetailsList = ArrayList<DownloadedFileDetails>()
+                
+                val thumbCacheDir = context?.getDir("thumbnails", Context.MODE_PRIVATE)
+
+                for (file in files) {
+                    val fileName = file.name
+                    val (title, signature) = parseFileName(fileName)
+                    val size = formatFileSize(file.length())
+                    var duration = "00:00"
+
+                    var thumbnailUri = Uri.EMPTY
+                    try {
+                        retriever.setDataSource(file.absolutePath)
+                        duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.let {
+                            formatDuration(it.toLong())
+                        } ?: "00:00"
+
+                        if (thumbCacheDir != null) {
+                            val thumbFile = File(thumbCacheDir, "${fileName}.png")
+                            if (thumbFile.exists()) {
+                                thumbnailUri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    thumbFile
+                                )
+                            } else {
+                                val bitmap = retriever.getFrameAtTime()
+                                if (bitmap != null) {
+                                    FileOutputStream(thumbFile).use { out ->
+                                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                                    }
+                                    thumbnailUri = FileProvider.getUriForFile(
+                                        context,
+                                        "${context.packageName}.fileprovider",
+                                        thumbFile
+                                    )
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+
+                    fileDetailsList.add(
+                        DownloadedFileDetails(
+                            title = title,
+                            path = file.absolutePath,
+                            signature = signature,
+                            size = size,
+                            duration = duration,
+                            thumbnailUri = thumbnailUri
+                        )
+                    )
+                }
+                _filesListState.value = FilesListState.Success(fileDetailsList)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _filesListState.value = FilesListState.Error("Failed to scan directory: ${e.message}")
+            } finally {
+                try {
+                    retriever.release()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+    
+    private fun parseFileName(fileName: String): Pair<String, String> {
+        val lastIndex = fileName.lastIndexOf('.')
+        if (lastIndex == -1) return fileName to "(MP4)"
+        
+        val nameWithoutExt = fileName.substring(0, lastIndex)
+        val signatureRegex = """(.*?)_reel(\(\d+\p?\))""".toRegex()
+        val matchResult = signatureRegex.find(nameWithoutExt)
+        
+        return if (matchResult != null) {
+            val (title, signature) = matchResult.destructured
+            title.replace("_", " ") to "(MP4 ${signature})"
+        } else {
+            nameWithoutExt.replace("_", " ") to "(MP4)"
+        }
+    }
+
+    private fun formatFileSize(size: Long): String {
+        if (size <= 0) return "0 B"
+        val units = arrayOf("B", "KB", "MB", "GB", "TB")
+        val digitGroups = (Math.log10(size.toDouble()) / Math.log10(1024.0)).toInt()
+        return String.format("%.1f %s", size / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
+    }
+
+    private fun formatDuration(durationMs: Long): String {
+        val seconds = (durationMs / 1000) % 60
+        val minutes = (durationMs / (1000 * 60)) % 60
+        val hours = (durationMs / (1000 * 60 * 60)) % 24
+        return if (hours > 0) {
+            String.format("%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format("%02d:%02d", minutes, seconds)
         }
     }
 

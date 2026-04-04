@@ -64,6 +64,7 @@ dependencies {
     // NEW: Required for the DownloaderViewModel and State Management
     // =========================================================
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    implementation("io.coil-kt:coil-compose:2.6.0")
     
     // YoutubeDL and FFmpeg dependencies
     implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
