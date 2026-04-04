@@ -18,8 +18,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
-import java.util.*
-import kotlin.collections.ArrayList
 
 class DownloaderViewModel : ViewModel() {
     private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Initializing)
@@ -68,14 +66,15 @@ class DownloaderViewModel : ViewModel() {
                 val request = YoutubeDLRequest(url)
                 val resolution = quality.replace("p", "")
                 
-                // Resolution signature format like "(1080)"
-                val resolutionSignature = "(${resolution})"
+                // This is the clean signature we add to the end: (1080p)
+                val resolutionSignature = "(${resolution}p)"
 
                 request.addOption("-f", "bestvideo[height<=$resolution]+bestaudio/best")
                 request.addOption("--merge-output-format", "mp4")
                 request.addOption("--restrict-filenames")
                 
-                // Naming scheme with signature: /path/title_reel(1080).mp4
+                // Saves as: /path/Video_Title_(1080p).mp4 
+                // (youtube-dl replaces spaces with underscores due to --restrict-filenames)
                 request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}.%(ext)s")
 
                 YoutubeDL.getInstance().execute(request, "downloader_process") { progress, etaInSeconds, line ->
@@ -95,7 +94,7 @@ class DownloaderViewModel : ViewModel() {
 
                 // Check if it was manually cancelled
                 if (_downloadState.value !is DownloadState.Cancelled) {
-                    _downloadState.value = DownloadState.Success("Video successfully saved as MP4!")
+                    _downloadState.value = DownloadState.Success("Video successfully saved!")
                     // Refresh files list after success
                     fetchDownloadedFiles(null)
                 }
@@ -139,7 +138,6 @@ class DownloaderViewModel : ViewModel() {
                 } ?: emptyArray()
 
                 val fileDetailsList = ArrayList<DownloadedFileDetails>()
-                
                 val thumbCacheDir = context?.getDir("thumbnails", Context.MODE_PRIVATE)
 
                 for (file in files) {
@@ -206,17 +204,22 @@ class DownloaderViewModel : ViewModel() {
         }
     }
     
+    // NEW PARSING LOGIC: Extracts clean title and (Resolution)
     private fun parseFileName(fileName: String): Pair<String, String> {
         val lastIndex = fileName.lastIndexOf('.')
         if (lastIndex == -1) return fileName to "(MP4)"
         
         val nameWithoutExt = fileName.substring(0, lastIndex)
-        val signatureRegex = """(.*?)_reel(\(\d+\p?\))""".toRegex()
+        
+        // Looks for an underscore or space followed by (digits + optional p)
+        // e.g., Title_(1080p) or Title (1080p)
+        val signatureRegex = """(.*)[\s_](\(\d+p?\))""".toRegex()
         val matchResult = signatureRegex.find(nameWithoutExt)
         
         return if (matchResult != null) {
             val (title, signature) = matchResult.destructured
-            title.replace("_", " ") to "(MP4 ${signature})"
+            // Replaces youtube-dl formatting underscores back into spaces
+            title.replace("_", " ") to signature
         } else {
             nameWithoutExt.replace("_", " ") to "(MP4)"
         }
