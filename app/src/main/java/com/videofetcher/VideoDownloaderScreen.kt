@@ -63,6 +63,10 @@ fun VideoDownloaderUI(
         // URL INPUT
         Text("Video URL", fontWeight = FontWeight.Bold, color = if (isReady) Color.Black else Color.Gray)
         Spacer(modifier = Modifier.height(8.dp))
+        
+        // Fixed: Dynamic container color safely handled outside of the defaults API
+        val inputContainerColor = if (isReady) MaterialTheme.colorScheme.secondaryContainer else Color(0xFFEEEEEE)
+        
         OutlinedTextField(
             value = url,
             onValueChange = { 
@@ -74,10 +78,9 @@ fun VideoDownloaderUI(
             singleLine = true,
             enabled = isReady,
             colors = TextFieldDefaults.outlinedTextFieldColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                containerColor = inputContainerColor,
                 focusedBorderColor = Color.Black,
                 unfocusedBorderColor = Color.Transparent,
-                disabledContainerColor = Color(0xFFEEEEEE),
                 disabledBorderColor = Color.Transparent
             ),
             shape = RoundedCornerShape(8.dp)
