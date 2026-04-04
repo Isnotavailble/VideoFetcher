@@ -138,7 +138,12 @@ class DownloaderViewModel : ViewModel() {
                 } ?: emptyArray()
 
                 val fileDetailsList = ArrayList<DownloadedFileDetails>()
-                val thumbCacheDir = context?.getDir("thumbnails", Context.MODE_PRIVATE)
+                
+                // FIXED: Use the standard cache directory so it doesn't permanently bloat the user's phone
+                val thumbCacheDir = File(context?.cacheDir, "thumbnails")
+                if (!thumbCacheDir.exists()) {
+                    thumbCacheDir.mkdirs()
+                }
 
                 for (file in files) {
                     val fileName = file.name
@@ -153,26 +158,23 @@ class DownloaderViewModel : ViewModel() {
                             formatDuration(it.toLong())
                         } ?: "00:00"
 
-                        if (thumbCacheDir != null) {
-                            val thumbFile = File(thumbCacheDir, "${fileName}.png")
-                            if (thumbFile.exists()) {
-                                thumbnailUri = FileProvider.getUriForFile(
-                                    context,
-                                    "${context.packageName}.fileprovider",
-                                    thumbFile
-                                )
-                            } else {
-                                val bitmap = retriever.getFrameAtTime()
-                                if (bitmap != null) {
-                                    FileOutputStream(thumbFile).use { out ->
-                                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                                    }
-                                    thumbnailUri = FileProvider.getUriForFile(
-                                        context,
-                                        "${context.packageName}.fileprovider",
-                                        thumbFile
-                                    )
+                        val thumbFile = File(thumbCacheDir, "${fileName}.png")
+                        
+                        if (thumbFile.exists()) {
+                            // FIXED: Use a direct local file URI instead of the complex FileProvider
+                            thumbnailUri = Uri.fromFile(thumbFile)
+                        } else {
+                            // Try to grab a frame from the middle of the video instead of the first millisecond (often black)
+                            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
+                            val timeUs = if (durationMs > 2000) (durationMs / 2) * 1000 else 1000000L
+                            
+                            val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                            if (bitmap != null) {
+                                FileOutputStream(thumbFile).use { out ->
+                                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
                                 }
+                                // FIXED: Use direct local file URI
+                                thumbnailUri = Uri.fromFile(thumbFile)
                             }
                         }
                     } catch (e: Exception) {
