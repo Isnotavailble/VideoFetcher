@@ -2,17 +2,14 @@ package com.videofetcher
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -25,21 +22,26 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 @Composable
 fun VideoDownloaderUI(
     viewModel: DownloaderViewModel = viewModel(),
-    initialUrl: String = ""
+    sharedUrl: String = ""
 ) {
     val context = LocalContext.current
-    var url by remember { mutableStateOf(initialUrl) }
+    var url by remember { mutableStateOf("") }
     var selectedFormat by remember { mutableStateOf("1080p") }
     val state by viewModel.downloadState.collectAsState()
 
-    // Update URL if shared intent brings a new one
-    LaunchedEffect(initialUrl) {
-        if (initialUrl.isNotEmpty()) url = initialUrl
+    // Update URL field automatically when intent brings a new link
+    LaunchedEffect(sharedUrl) {
+        if (sharedUrl.isNotEmpty()) {
+            url = sharedUrl
+        }
     }
 
     LaunchedEffect(Unit) {
         viewModel.initializeEngine(context.applicationContext)
     }
+
+    // Determine if inputs should be interactive
+    val isReady = state !is DownloadState.Initializing
 
     Column(
         modifier = Modifier
@@ -48,26 +50,18 @@ fun VideoDownloaderUI(
             .padding(24.dp)
     ) {
         // HEADER
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "YOUTUBE\nDOWNLOADER",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.ExtraBold,
-                lineHeight = 32.sp,
-                color = Color.Black
-            )
-            // Placeholder for an icon/logo
-            Icon(Icons.Default.PlayArrow, contentDescription = "Logo", modifier = Modifier.size(32.dp))
-        }
+        Text(
+            text = "VIDEO\nFETCHER",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.ExtraBold,
+            lineHeight = 32.sp,
+            color = Color.Black
+        )
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(40.dp))
 
         // URL INPUT
-        Text("Enter YouTube URL", fontWeight = FontWeight.Bold, color = Color.Black)
+        Text("Video URL", fontWeight = FontWeight.Bold, color = if (isReady) Color.Black else Color.Gray)
         Spacer(modifier = Modifier.height(8.dp))
         OutlinedTextField(
             value = url,
@@ -75,13 +69,16 @@ fun VideoDownloaderUI(
                 url = it
                 if (state is DownloadState.Error || state is DownloadState.Cancelled) viewModel.resetState()
             },
-            placeholder = { Text("https://youtube.com/watch?v=...") },
+            placeholder = { Text("https://...") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
+            enabled = isReady,
             colors = TextFieldDefaults.outlinedTextFieldColors(
                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                 focusedBorderColor = Color.Black,
-                unfocusedBorderColor = Color.Transparent
+                unfocusedBorderColor = Color.Transparent,
+                disabledContainerColor = Color(0xFFEEEEEE),
+                disabledBorderColor = Color.Transparent
             ),
             shape = RoundedCornerShape(8.dp)
         )
@@ -89,7 +86,7 @@ fun VideoDownloaderUI(
         Spacer(modifier = Modifier.height(24.dp))
 
         // FORMAT SELECTION
-        Text("Format Selection", fontWeight = FontWeight.Bold, color = Color.Black)
+        Text("Format Selection", fontWeight = FontWeight.Bold, color = if (isReady) Color.Black else Color.Gray)
         Spacer(modifier = Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -100,13 +97,14 @@ fun VideoDownloaderUI(
                 Surface(
                     onClick = { selectedFormat = format },
                     shape = RoundedCornerShape(8.dp),
-                    color = if (isSelected) Color.Black else Color.White,
-                    border = BorderStroke(1.dp, Color.Black),
-                    modifier = Modifier.weight(1f)
+                    color = if (isSelected && isReady) Color.Black else if (!isReady) Color(0xFFEEEEEE) else Color.White,
+                    border = BorderStroke(1.dp, if (!isReady) Color.Transparent else Color.Black),
+                    modifier = Modifier.weight(1f),
+                    enabled = isReady
                 ) {
                     Text(
                         text = format,
-                        color = if (isSelected) Color.White else Color.Black,
+                        color = if (isSelected && isReady) Color.White else if (!isReady) Color.Gray else Color.Black,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
@@ -114,62 +112,52 @@ fun VideoDownloaderUI(
             }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        // This Spacer pushes the status and buttons to the bottom of the screen
+        Spacer(modifier = Modifier.weight(1f))
 
-        // STATUS / PROGRESS AREA
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .border(2.dp, Color(0xFFEEEEEE), RoundedCornerShape(12.dp))
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color(0xFFFAFAFA)),
-            contentAlignment = Alignment.Center
+        // COMPACT STATUS AREA
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             when (state) {
-                is DownloadState.Idle, is DownloadState.Cancelled -> {
-                    Text(
-                        if (state is DownloadState.Cancelled) "Download Cancelled" else "Ready to download",
-                        color = Color.Gray
-                    )
+                is DownloadState.Initializing -> {
+                    CircularProgressIndicator(color = Color.Black, modifier = Modifier.size(24.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Initializing engine...", color = Color.Gray, fontWeight = FontWeight.Medium)
                 }
                 is DownloadState.Downloading -> {
                     val downloadState = state as DownloadState.Downloading
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Text(downloadState.status, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(16.dp))
-                        LinearProgressIndicator(
-                            progress = downloadState.progress,
-                            modifier = Modifier.fillMaxWidth().height(8.dp),
-                            color = Color.Black,
-                            trackColor = Color.LightGray
-                        )
-                    }
+                    Text(downloadState.status, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LinearProgressIndicator(
+                        progress = downloadState.progress,
+                        modifier = Modifier.fillMaxWidth().height(8.dp),
+                        color = Color.Black,
+                        trackColor = Color.LightGray
+                    )
                 }
                 is DownloadState.Success -> {
-                    Text("Success!", color = Color(0xFF00C853), fontWeight = FontWeight.Bold)
+                    Text("Success! Video saved.", color = Color(0xFF00C853), fontWeight = FontWeight.Bold)
                 }
                 is DownloadState.Error -> {
-                    Text((state as DownloadState.Error).message, color = Color.Red, textAlign = TextAlign.Center, modifier = Modifier.padding(16.dp))
+                    Text((state as DownloadState.Error).message, color = Color.Red, textAlign = TextAlign.Center)
                 }
-                is DownloadState.Initializing -> {
-                    CircularProgressIndicator(color = Color.Black)
+                is DownloadState.Cancelled -> {
+                    Text("Download Cancelled", color = Color.Gray, fontWeight = FontWeight.Bold)
+                }
+                is DownloadState.Idle -> {
+                    // Empty space when waiting for user input
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // ACTION BUTTONS (DOWNLOAD / PAUSE / CANCEL)
+        // ACTION BUTTONS
         if (state is DownloadState.Downloading) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Pause (Mapped to cancel/interruption for now as true pause requires chunking)
                 Button(
                     onClick = { viewModel.cancelDownload() },
                     modifier = Modifier.weight(1f).height(56.dp),
@@ -198,10 +186,11 @@ fun VideoDownloaderUI(
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color.Black,
                     contentColor = Color.White,
-                    disabledContainerColor = Color.LightGray
+                    disabledContainerColor = Color(0xFFCCCCCC),
+                    disabledContentColor = Color.DarkGray
                 ),
                 shape = RoundedCornerShape(8.dp),
-                enabled = url.isNotBlank() && state !is DownloadState.Initializing
+                enabled = url.isNotBlank() && isReady
             ) {
                 Text(
                     text = "DOWNLOAD VIDEO",
