@@ -225,7 +225,7 @@ fun VideoDownloaderUI(
             }
         } else {
             Button(
-                onClick = { viewModel.startDownload(url, selectedFormat) },
+                onClick = { viewModel.startDownload(url, selectedFormat, context.applicationContext) },
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color.Black,
