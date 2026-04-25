@@ -107,14 +107,12 @@ class DownloaderViewModel : ViewModel() {
                     // FIXED: Pass the context so it can actually find the thumbnails folder
                     fetchDownloadedFiles(context)
                 }
+				
                 
             } catch (e: Exception) {
-                if (e.message?.contains("Process destroyed") == true) {
                 // 1. If the user clicked Cancel, ignore the resulting crash
                 if (_downloadState.value is DownloadState.Cancelled || e.message?.contains("Process destroyed") == true) {
                     _downloadState.value = DownloadState.Cancelled
-                } else {
-                    _downloadState.value = DownloadState.Error(e.message ?: "An unknown error occurred")
                     return@launch
                 }
 
