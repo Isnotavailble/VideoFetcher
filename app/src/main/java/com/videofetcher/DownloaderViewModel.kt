@@ -110,10 +110,28 @@ class DownloaderViewModel : ViewModel() {
                 
             } catch (e: Exception) {
                 if (e.message?.contains("Process destroyed") == true) {
+                // 1. If the user clicked Cancel, ignore the resulting crash
+                if (_downloadState.value is DownloadState.Cancelled || e.message?.contains("Process destroyed") == true) {
                     _downloadState.value = DownloadState.Cancelled
                 } else {
                     _downloadState.value = DownloadState.Error(e.message ?: "An unknown error occurred")
+                    return@launch
                 }
+
+                // Log the real, ugly error to the console just in case you need to debug it later
+                e.printStackTrace()
+
+                // 2. Smart Error Mapper: Translate raw terminal errors into friendly UI messages
+                val rawError = e.message ?: ""
+                val friendlyMessage = when {
+                    rawError.contains("is not a valid URL", ignoreCase = true) -> "The link provided is not a valid video URL."
+                    rawError.contains("Unsupported URL", ignoreCase = true) -> "We don't support downloading from this website yet."
+                    rawError.contains("Sign in", ignoreCase = true) || rawError.contains("login", ignoreCase = true) -> "Login required. Tip: Don't copy-paste the link. Instead, use the 'Share with this app' button and choose VideoFetcher!"
+                    rawError.contains("Not Found", ignoreCase = true) || rawError.contains("404", ignoreCase = true) -> "Video not found. The link might be broken or private."
+                    else -> "Couldn't download this video. Please check the link and try again."
+                }
+
+                _downloadState.value = DownloadState.Error(friendlyMessage)
             }
         }
     }

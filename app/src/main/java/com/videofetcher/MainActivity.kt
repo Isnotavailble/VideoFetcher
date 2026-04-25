@@ -11,6 +11,9 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     // Hold the shared URL in a state variable so Compose can react to it instantly
@@ -50,14 +53,16 @@ class MainActivity : ComponentActivity() {
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
             
-            // Fixed: Using a Kotlin Raw String (""") to prevent regex escape compilation errors
-            val urlRegex = """(?i)\b((?:https?://|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'".,<>?«»“”‘’]))""".toRegex()
-            val match = urlRegex.find(sharedText)
-            
-            if (match != null) {
-                sharedUrlState.value = match.value
-            } else {
-                sharedUrlState.value = sharedText
+            // Phase 3: Offload heavy Regex parsing to a background thread to prevent ANR crashes
+            lifecycleScope.launch(Dispatchers.Default) {
+                val urlRegex = """(?i)\b((?:https?://|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'".,<>?«»“”‘’]))""".toRegex()
+                val match = urlRegex.find(sharedText)
+                
+                if (match != null) {
+                    sharedUrlState.value = match.value
+                } else {
+                    sharedUrlState.value = sharedText
+                }
             }
         }
     }
