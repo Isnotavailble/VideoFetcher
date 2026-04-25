@@ -2,6 +2,7 @@ package com.videofetcher
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.media.MediaScannerConnection
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Environment
@@ -104,7 +105,14 @@ class DownloaderViewModel : ViewModel() {
                 // Check if it was manually cancelled
                 if (_downloadState.value !is DownloadState.Cancelled) {
                     _downloadState.value = DownloadState.Success("Video successfully saved!")
-                    // FIXED: Pass the context so it can actually find the thumbnails folder
+
+                    // Find the newest file in the directory (the one we just downloaded)
+                    val newFile = targetDir.listFiles()?.maxByOrNull { it.lastModified() }
+                    if (newFile != null) {
+                        // Trigger a media scan to make the video appear in the gallery immediately
+                        MediaScannerConnection.scanFile(context, arrayOf(newFile.absolutePath), null, null)
+                    }
+
                     fetchDownloadedFiles(context)
                 }
 				

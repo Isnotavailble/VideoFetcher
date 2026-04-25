@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Environment
 import android.os.IBinder
@@ -105,6 +106,12 @@ class DownloadService : Service() {
                         .setContentText("Successfully saved to Downloads/VideoFetcher")
                         .build()
                     notificationManager.notify(NOTIFICATION_ID + 1, successNotification)
+
+                    // Find the newest file and trigger a media scan to make it visible in the gallery
+                    val newFile = targetDir.listFiles()?.maxByOrNull { it.lastModified() }
+                    if (newFile != null) {
+                        MediaScannerConnection.scanFile(applicationContext, arrayOf(newFile.absolutePath), null, null)
+                    }
                 }
 
             } catch (e: Exception) {
