@@ -30,8 +30,8 @@ android {
         abi {
             isEnable = true
             reset()
-            // ONLY build the 64-bit version to save data and build time
-            include("arm64-v8a")
+            // Build for both 32-bit and 64-bit ARM CPUs
+            include("armeabi-v7a", "arm64-v8a")
             isUniversalApk = false // Prevents the creation of the massive 200MB file
         }
     }
