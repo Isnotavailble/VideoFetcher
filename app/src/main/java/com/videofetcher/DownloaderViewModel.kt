@@ -76,19 +76,29 @@ class DownloaderViewModel : ViewModel() {
                 // Saves as: /path/Video_Title_(1080p).mp4 
                 request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}.%(ext)s")
 
+                var lastUpdateTime = 0L
+                var lastProgress = -1f
+
                 YoutubeDL.getInstance().execute(request, "downloader_process") { progress, etaInSeconds, line ->
                     val isConverting = line.contains("[ffmpeg]") || line.contains("Merging") || progress >= 100f
+                    val currentTime = System.currentTimeMillis()
 
-                    val currentStatus = if (isConverting) {
-                        "Converting & Merging to MP4... Please wait"
-                    } else {
-                        "Downloading: ${String.format("%.1f", progress)}% (ETA: ${etaInSeconds}s)"
+                    // Throttle updates: Only update if converting, finished, or 300ms have passed with new progress
+                    if (isConverting || progress >= 100f || (currentTime - lastUpdateTime > 300 && progress != lastProgress)) {
+                        lastUpdateTime = currentTime
+                        lastProgress = progress
+
+                        val currentStatus = if (isConverting) {
+                            "Converting & Merging to MP4... Please wait"
+                        } else {
+                            "Downloading: ${String.format("%.1f", progress)}% (ETA: ${etaInSeconds}s)"
+                        }
+
+                        _downloadState.value = DownloadState.Downloading(
+                            progress = if (isConverting) 1f else (progress / 100f),
+                            status = currentStatus
+                        )
                     }
-
-                    _downloadState.value = DownloadState.Downloading(
-                        progress = if (isConverting) 1f else (progress / 100f),
-                        status = currentStatus
-                    )
                 }
 
                 // Check if it was manually cancelled
@@ -135,84 +145,79 @@ class DownloaderViewModel : ViewModel() {
                     file.isFile && file.name.endsWith(".mp4", ignoreCase = true)
                 } ?: emptyArray()
 
-                val fileDetailsList = ArrayList<DownloadedFileDetails>()
-                
                 val thumbCacheDir = File(context?.cacheDir, "thumbnails")
                 if (!thumbCacheDir.exists()) {
                     thumbCacheDir.mkdirs()
                 }
 
-                for (file in files) {
-                    val fileName = file.name
-                    val (title, signature) = parseFileName(fileName)
-                    val size = formatFileSize(file.length())
-                    var duration = "00:00"
+                // STEP 1: Fast load - Instantly show files without waiting for heavy extraction
+                val initialList = files.map { file ->
+                    val (title, signature) = parseFileName(file.name)
+                    val thumbFile = File(thumbCacheDir, "${file.name}.png")
+                    DownloadedFileDetails(
+                        title = title,
+                        path = file.absolutePath,
+                        signature = signature,
+                        size = formatFileSize(file.length()),
+                        duration = "--:--", // Placeholder, will be updated lazily
+                        thumbnailUri = if (thumbFile.exists()) Uri.fromFile(thumbFile) else Uri.EMPTY
+                    )
+                }.toMutableList()
 
-                    var thumbnailUri = Uri.EMPTY
-                    val thumbFile = File(thumbCacheDir, "${fileName}.png")
-                    
-                    if (thumbFile.exists()) {
-                        thumbnailUri = Uri.fromFile(thumbFile)
-                    }
+                // Immediately update UI with names and sizes
+                _filesListState.value = FilesListState.Success(initialList.toList())
 
-                    // FIXED: A fresh retriever created INSIDE the loop so one file doesn't crash the rest
+                // STEP 2: Lazy processing - Fetch durations and missing thumbnails in background
+                for (i in files.indices) {
+                    val file = files[i]
+                    val thumbFile = File(thumbCacheDir, "${file.name}.png")
+                    var updatedUri = initialList[i].thumbnailUri
+                    var updatedDuration = initialList[i].duration
+
                     val retriever = MediaMetadataRetriever()
                     try {
-                        // SMART SYNC POLLING: Wait for FFmpeg to unlock the file
                         var fileReadable = false
                         var attempts = 0
                         while (!fileReadable && attempts < 10) {
                             try {
-                                FileInputStream(file).use { fis ->
-                                    retriever.setDataSource(fis.fd)
-                                }
+                                FileInputStream(file).use { fis -> retriever.setDataSource(fis.fd) }
                                 fileReadable = true
                             } catch (e: Exception) {
                                 attempts++
-                                if (attempts < 10) {
-                                    delay(500)
-                                } else {
-                                    throw Exception("File locked after 5 seconds")
-                                }
+                                if (attempts < 10) delay(500)
                             }
                         }
 
-                        duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.let {
-                            formatDuration(it.toLong())
-                        } ?: "00:00"
-                        
-                        if (!thumbFile.exists()) {
+                        if (fileReadable) {
                             val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
-                            val timeUs = if (durationMs > 2000) (durationMs / 2) * 1000 else 1000000L
-                            
-                            val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                            if (bitmap != null) {
-                                FileOutputStream(thumbFile).use { out ->
-                                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                            updatedDuration = formatDuration(durationMs)
+
+                            if (!thumbFile.exists()) {
+                                val timeUs = if (durationMs > 2000) (durationMs / 2) * 1000 else 1000000L
+                                val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                if (bitmap != null) {
+                                    FileOutputStream(thumbFile).use { out ->
+                                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                                    }
+                                    updatedUri = Uri.fromFile(thumbFile)
                                 }
-                                thumbnailUri = Uri.fromFile(thumbFile)
                             }
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
                     } finally {
-                        try {
-                            retriever.release()
-                        } catch (e: Exception) {}
+                        try { retriever.release() } catch (e: Exception) {}
                     }
 
-                    fileDetailsList.add(
-                        DownloadedFileDetails(
-                            title = title,
-                            path = file.absolutePath,
-                            signature = signature,
-                            size = size,
-                            duration = duration,
-                            thumbnailUri = thumbnailUri
-                        )
-                    )
+                    // Only update the state if something actually changed
+                    if (updatedDuration != initialList[i].duration || updatedUri != initialList[i].thumbnailUri) {
+                        initialList[i] = initialList[i].copy(duration = updatedDuration, thumbnailUri = updatedUri)
+                        _filesListState.value = FilesListState.Success(initialList.toList())
+                    }
+                    
+                    // Add a tiny delay to let Garbage Collection clean up Bitmaps to prevent OOM
+                    delay(50)
                 }
-                _filesListState.value = FilesListState.Success(fileDetailsList)
             } catch (e: Exception) {
                 e.printStackTrace()
                 _filesListState.value = FilesListState.Error("Failed to scan directory: ${e.message}")
