@@ -30,8 +30,8 @@ android {
         abi {
             isEnable = true
             reset()
-            // Build for both 32-bit and 64-bit ARM CPUs
-            include("armeabi-v7a", "arm64-v8a")
+            // Build for both 32-bit and 64-bit ARM CPUs (armeabi-v7a and arm64-v8a)
+            include("armeabi-v7a")
             isUniversalApk = false // Prevents the creation of the massive 200MB file
         }
     }
@@ -40,16 +40,9 @@ android {
     // NEW: Resolves the "extractNativeLibs" conflict with Gradle
     // =========================================================
     packaging {
-        // This is the modern approach to prevent conflicts with native libraries
-        // from different dependencies (like youtubedl and ffmpeg). It resolves
-        // the "Multiple task action failures" error during packaging.
-        // The `**` wildcard matches any directory, so this handles all architectures (arm64-v8a, armeabi-v7a, etc.)
-        // without needing to list each one manually. We only need to list the .so files that are known to
-        // cause duplication errors.
-        jniLibs.pickFirsts.addAll(listOf(
-            "**/libffmpeg.so",
-            "**/libpython.so"
-        ))
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     buildFeatures {
