@@ -40,9 +40,16 @@ android {
     // NEW: Resolves the "extractNativeLibs" conflict with Gradle
     // =========================================================
     packaging {
-        jniLibs {
-            useLegacyPackaging = true
-        }
+        // This is the modern approach to prevent conflicts with native libraries
+        // from different dependencies (like youtubedl and ffmpeg). It resolves
+        // the "Multiple task action failures" error during packaging.
+        // The `**` wildcard matches any directory, so this handles all architectures (arm64-v8a, armeabi-v7a, etc.)
+        // without needing to list each one manually. We only need to list the .so files that are known to
+        // cause duplication errors.
+        jniLibs.pickFirsts.addAll(listOf(
+            "**/libffmpeg.so",
+            "**/libpython.so"
+        ))
     }
 
     buildFeatures {
