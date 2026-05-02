@@ -12,8 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,6 +24,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -36,13 +36,24 @@ import coil.transform.RoundedCornersTransformation
 @Composable
 fun VideoDownloaderUI(
     viewModel: DownloaderViewModel = viewModel(),
-    sharedUrl: String = ""
+    sharedUrl: String = "",
+    isDarkTheme: Boolean,
+    onThemeToggle: () -> Unit
 ) {
     val context = LocalContext.current
     var url by remember { mutableStateOf("") }
     var selectedFormat by remember { mutableStateOf("1080p") }
     val state by viewModel.downloadState.collectAsState()
     val filesListState by viewModel.filesListState.collectAsState()
+    val pausedDownloads by viewModel.pausedDownloads.collectAsState()
+
+    // Auto-refresh file list when download succeeds
+    LaunchedEffect(state) {
+        viewModel.fetchPausedDownloads(context.applicationContext)
+        if (state is DownloadState.Success) {
+            viewModel.fetchDownloadedFiles(context.applicationContext)
+        }
+    }
 
     // Update URL field automatically when intent brings a new link
     LaunchedEffect(sharedUrl) {
@@ -83,25 +94,38 @@ fun VideoDownloaderUI(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.background)
             .padding(24.dp)
     ) {
-        // --- RESTORED EXACT HEADER ---
-        Text(
-            text = "VIDEO\nFETCHER",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.ExtraBold,
-            lineHeight = 32.sp,
-            color = Color.Black
-        )
+        // --- HEADER WITH THEME TOGGLE ---
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "VIDEO\nFETCHER",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.ExtraBold,
+                lineHeight = 32.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            IconButton(onClick = onThemeToggle) {
+                Icon(
+                    painter = painterResource(id = if (isDarkTheme) R.drawable.ic_light_mode else R.drawable.ic_dark_mode),
+                    contentDescription = "Switch Theme",
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
 
-        Spacer(modifier = Modifier.height(40.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         // --- RESTORED EXACT URL INPUT ---
-        Text("Video URL", fontWeight = FontWeight.Bold, color = if (isReady) Color.Black else Color.Gray)
+        Text("Video URL", fontWeight = FontWeight.Bold, color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
         Spacer(modifier = Modifier.height(8.dp))
         
-        val inputContainerColor = if (isReady) MaterialTheme.colorScheme.secondaryContainer else Color(0xFFEEEEEE)
+        val inputContainerColor = if (isReady) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
         
         OutlinedTextField(
             value = url,
@@ -109,13 +133,16 @@ fun VideoDownloaderUI(
                 url = it
                 if (state is DownloadState.Error || state is DownloadState.Cancelled) viewModel.resetState()
             },
-            placeholder = { Text("https://...") },
+            placeholder = { Text("https://...", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)) },
+            textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onSurface),
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             enabled = isReady,
-            colors = TextFieldDefaults.outlinedTextFieldColors(
-                containerColor = inputContainerColor,
-                focusedBorderColor = Color.Black,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = inputContainerColor,
+                unfocusedContainerColor = inputContainerColor,
+                disabledContainerColor = inputContainerColor,
+                focusedBorderColor = Color.Transparent,
                 unfocusedBorderColor = Color.Transparent,
                 disabledBorderColor = Color.Transparent
             ),
@@ -125,7 +152,7 @@ fun VideoDownloaderUI(
         Spacer(modifier = Modifier.height(24.dp))
 
         // --- RESTORED EXACT FORMAT SELECTION ---
-        Text("Format Selection", fontWeight = FontWeight.Bold, color = if (isReady) Color.Black else Color.Gray)
+        Text("Format Selection", fontWeight = FontWeight.Bold, color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
         Spacer(modifier = Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -136,14 +163,14 @@ fun VideoDownloaderUI(
                 Surface(
                     onClick = { selectedFormat = format },
                     shape = RoundedCornerShape(8.dp),
-                    color = if (isSelected && isReady) Color.Black else if (!isReady) Color(0xFFEEEEEE) else Color.White,
-                    border = BorderStroke(1.dp, if (!isReady) Color.Transparent else Color.Black),
+                    color = if (isSelected && isReady) MaterialTheme.colorScheme.primary else if (!isReady) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, if (!isReady) Color.Transparent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)),
                     modifier = Modifier.weight(1f),
                     enabled = isReady
                 ) {
                     Text(
                         text = format,
-                        color = if (isSelected && isReady) Color.White else if (!isReady) Color.Gray else Color.Black,
+                        color = if (isSelected && isReady) MaterialTheme.colorScheme.onPrimary else if (!isReady) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurface,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
@@ -181,8 +208,37 @@ fun VideoDownloaderUI(
                 }
             }
 
+            if (pausedDownloads.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "Paused Videos",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)
+                    )
+                }
+                items(pausedDownloads) { paused ->
+                    PausedVideoCard(
+                        paused = paused,
+                        onResume = { viewModel.resumeDownload(context.applicationContext, paused.url, paused.quality) },
+                        onCancel = { viewModel.cancelPausedDownload(context.applicationContext, paused.url) }
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
+
             when (val filesList = filesListState) {
                 is FilesListState.Success -> {
+                    if (filesList.files.isNotEmpty()) {
+                        item {
+                            Text(
+                                text = "Downloaded Videos",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)
+                            )
+                        }
+                    }
                     items(filesList.files) { file ->
                         DownloadedVideoCard(file)
                         Spacer(modifier = Modifier.height(16.dp))
@@ -206,22 +262,22 @@ fun VideoDownloaderUI(
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Button(
-                    onClick = { viewModel.cancelDownload() },
+                    onClick = { viewModel.pauseDownload(context.applicationContext) },
                     modifier = Modifier.weight(1f).height(56.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                    border = BorderStroke(2.dp, Color.Black),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.onSurface),
+                    border = BorderStroke(2.dp, MaterialTheme.colorScheme.onSurface),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text("PAUSE", fontWeight = FontWeight.Bold)
+                    Text("PAUSE", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
                 }
                 
                 Button(
-                    onClick = { viewModel.cancelDownload() },
+                    onClick = { viewModel.cancelDownload(context.applicationContext) },
                     modifier = Modifier.weight(1f).height(56.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Black, contentColor = Color.White),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = "Cancel")
+                    Icon(imageVector = Icons.Filled.Close, contentDescription = "Cancel")
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("CANCEL", fontWeight = FontWeight.Bold)
                 }
@@ -231,18 +287,19 @@ fun VideoDownloaderUI(
                 onClick = { viewModel.startDownload(url, selectedFormat, context.applicationContext) },
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black,
-                    contentColor = Color.White,
-                    disabledContainerColor = Color(0xFFCCCCCC),
-                    disabledContentColor = Color.DarkGray
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    disabledContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+                    disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                 ),
                 shape = RoundedCornerShape(8.dp),
                 enabled = url.isNotBlank() && isReady
             ) {
+                Icon(painter = painterResource(id = R.drawable.ic_download), contentDescription = null, modifier = Modifier.size(24.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "DOWNLOAD VIDEO",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
+                    fontWeight = FontWeight.Bold, fontSize = 16.sp
                 )
             }
         }
@@ -255,15 +312,15 @@ fun DownloadingVideoCard(downloadState: DownloadState.Downloading) {
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFAFAFA)),
-        border = BorderStroke(1.dp, Color(0xFFEEEEEE))
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
                 text = downloadState.status,
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp,
-                color = Color.Black
+                color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(16.dp))
             LinearProgressIndicator(
@@ -272,8 +329,8 @@ fun DownloadingVideoCard(downloadState: DownloadState.Downloading) {
                     .fillMaxWidth()
                     .height(8.dp)
                     .clip(RoundedCornerShape(4.dp)),
-                color = Color.Black,
-                trackColor = Color.LightGray
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
             )
         }
     }
@@ -285,8 +342,8 @@ fun DownloadedVideoCard(file: DownloadedFileDetails) {
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = BorderStroke(1.dp, Color(0xFFEEEEEE))
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
     ) {
         Row(
             modifier = Modifier
@@ -311,13 +368,13 @@ fun DownloadedVideoCard(file: DownloadedFileDetails) {
                     modifier = Modifier
                         .size(64.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color.LightGray),
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        painter = painterResource(id = android.R.drawable.ic_menu_slideshow),
+                        imageVector = Icons.Filled.PlayArrow,
                         contentDescription = "No Thumbnail",
-                        tint = Color.White,
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                         modifier = Modifier.size(32.dp)
                     )
                 }
@@ -331,18 +388,18 @@ fun DownloadedVideoCard(file: DownloadedFileDetails) {
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp,
                     maxLines = 2,
-                    color = Color.Black
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = file.signature,
-                    color = Color.DarkGray,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     fontSize = 12.sp
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "${file.duration} | ${file.size}",
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                     fontSize = 12.sp
                 )
             }
@@ -356,15 +413,15 @@ fun InitializingCard() {
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFAFAFA))
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color.Black)
+            CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(8.dp))
-            Text("Extracting libraries...", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+            Text("Extracting libraries...", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
         }
     }
 }
@@ -375,7 +432,7 @@ fun StatusCard(state: DownloadState) {
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFAFAFA))
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             when (state) {
@@ -389,14 +446,14 @@ fun StatusCard(state: DownloadState) {
                 is DownloadState.Cancelled -> {
                     Text(
                         "Download Cancelled",
-                        color = Color.Gray,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         fontWeight = FontWeight.Bold
                     )
                 }
                 is DownloadState.Error -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            Icons.Default.Warning,
+                            imageVector = Icons.Filled.Warning,
                             contentDescription = "Error",
                             tint = Color.Red
                         )
@@ -415,16 +472,58 @@ fun StatusCard(state: DownloadState) {
 }
 
 @Composable
+fun PausedVideoCard(paused: PausedDownload, onResume: () -> Unit, onCancel: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Video (${paused.quality})", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = paused.url,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                LinearProgressIndicator(
+                    progress = (paused.progress / 100f).coerceIn(0f, 1f),
+                    modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                )
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            IconButton(onClick = onResume) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = "Resume", tint = MaterialTheme.colorScheme.onSurface)
+            }
+            IconButton(onClick = onCancel) {
+                Icon(Icons.Filled.Close, contentDescription = "Cancel", tint = Color.Red)
+            }
+        }
+    }
+}
+
+@Composable
 fun ErrorCard(message: String) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
         shape = RoundedCornerShape(8.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    Icons.Default.Warning,
+                    imageVector = Icons.Filled.Warning,
                     contentDescription = "Error",
                     tint = Color.Red
                 )

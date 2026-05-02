@@ -5,39 +5,48 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.*
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.lifecycleScope
+import com.videofetcher.settings.SettingsManager
+import com.videofetcher.theme.VideoFetcherTheme
+import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     // Hold the shared URL in a state variable so Compose can react to it instantly
     private var sharedUrlState = mutableStateOf("")
+    private lateinit var settingsManager: SettingsManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Stop system from force-inverting explicit colors (Fixes the white header bug on Xiaomi/Samsung)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            window.decorView.isForceDarkAllowed = false
+        }
+
+        settingsManager = SettingsManager(applicationContext)
 
         // Handle intent if app is opened fresh
         handleIntent(intent)
 
         setContent {
-            val ollamaTheme = lightColorScheme(
-                background = Color.White,
-                surface = Color.White,
-                onSurface = Color.Black,
-                primary = Color.Black,
-                onPrimary = Color.White,
-                secondaryContainer = Color(0xFFF5F5F5)
-            )
+            val isDarkTheme by settingsManager.isDark.collectAsState(initial = false)
+            val scope = rememberCoroutineScope()
 
-            MaterialTheme(colorScheme = ollamaTheme) {
+            VideoFetcherTheme(darkTheme = isDarkTheme) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    VideoDownloaderUI(sharedUrl = sharedUrlState.value)
+                    VideoDownloaderUI(
+                        sharedUrl = sharedUrlState.value,
+                        isDarkTheme = isDarkTheme,
+                        onThemeToggle = { scope.launch { settingsManager.setDarkMode(!isDarkTheme) } }
+                    )
                 }
             }
         }

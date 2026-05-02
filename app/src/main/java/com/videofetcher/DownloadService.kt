@@ -27,6 +27,11 @@ class DownloadService : Service() {
     private val NOTIFICATION_ID = 1001
     
     private var isCancelled = false
+    private var isPausing = false
+
+    private var currentUrl = ""
+    private var currentQuality = ""
+    private var currentProgress = 0f
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -36,16 +41,40 @@ class DownloadService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "PAUSE_DOWNLOAD") {
+            isPausing = true
+            isCancelled = true
+            stopProcess()
+            return START_NOT_STICKY
+        }
+
         if (intent?.action == "CANCEL_DOWNLOAD") {
-            cancelDownload()
+            isPausing = false
+            isCancelled = true
+            DownloadManager.updateState(DownloadState.Cancelled)
+            if (currentUrl.isNotEmpty()) {
+                PauseRepository(applicationContext).removePausedDownload(currentUrl)
+            }
+            stopProcess()
             return START_NOT_STICKY
         }
 
         val url = intent?.getStringExtra("URL") ?: return START_NOT_STICKY
         val quality = intent.getStringExtra("QUALITY") ?: "1080p"
 
+        if (DownloadManager.isDownloading()) {
+            return START_NOT_STICKY
+        }
+
         isCancelled = false
-        val initialNotification = createNotification("Starting download...", 0)
+        isPausing = false
+        currentUrl = url
+        currentQuality = quality
+        currentProgress = 0f
+
+        DownloadManager.updateState(DownloadState.Downloading(0f, "0% • Starting..."))
+
+        val initialNotification = createNotification("0% • Starting...", 0)
         startForeground(NOTIFICATION_ID, initialNotification.build())
 
         startBackgroundDownload(url, quality)
@@ -81,6 +110,8 @@ class DownloadService : Service() {
                 YoutubeDL.getInstance().execute(request, "downloader_process") { progress, etaInSeconds, line ->
                     if (isCancelled) return@execute
                     
+                    currentProgress = progress
+
                     val isConverting = line.contains("[ffmpeg]") || line.contains("Merging") || progress >= 100f
                     val currentTime = System.currentTimeMillis()
 
@@ -91,8 +122,13 @@ class DownloadService : Service() {
                         val statusText = if (isConverting) {
                             "Converting & Merging... Please wait"
                         } else {
-                            "Downloading: ${String.format("%.1f", progress)}% (ETA: ${etaInSeconds}s)"
+                            "${String.format("%.1f", progress)}% • ETA: ${etaInSeconds}s"
                         }
+
+                        DownloadManager.updateState(DownloadState.Downloading(
+                            progress = if (isConverting) 1f else (progress / 100f),
+                            status = statusText
+                        ))
 
                         val notification = createNotification(statusText, progress.toInt())
                         notificationManager.notify(NOTIFICATION_ID, notification.build())
@@ -100,6 +136,8 @@ class DownloadService : Service() {
                 }
 
                 if (!isCancelled) {
+                    DownloadManager.updateState(DownloadState.Success("Video successfully saved!"))
+
                     val successNotification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
                         .setSmallIcon(android.R.drawable.stat_sys_download_done)
                         .setContentTitle("Video Downloaded")
@@ -115,7 +153,9 @@ class DownloadService : Service() {
                 }
 
             } catch (e: Exception) {
-                if (!isCancelled && e.message?.contains("Process destroyed") != true) {
+                if (isPausing) {
+                    // Expected exception when process is destroyed for pausing. Ignore safely.
+                } else if (!isCancelled && e.message?.contains("Process destroyed") != true) {
                     e.printStackTrace()
                     val rawError = e.message ?: ""
                     val friendlyMessage = when {
@@ -126,6 +166,8 @@ class DownloadService : Service() {
                         else -> "Couldn't download this video."
                     }
                     
+                    DownloadManager.updateState(DownloadState.Error(friendlyMessage))
+
                     val errorNotification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
                         .setSmallIcon(android.R.drawable.stat_notify_error)
                         .setContentTitle("Download Failed")
@@ -135,6 +177,15 @@ class DownloadService : Service() {
                     notificationManager.notify(NOTIFICATION_ID + 2, errorNotification)
                 }
             } finally {
+                if (isPausing) {
+                    PauseRepository(applicationContext).savePausedDownload(
+                        PausedDownload(currentUrl, "Video", currentQuality, currentProgress)
+                    )
+                    DownloadManager.updateState(DownloadState.Idle)
+                } else if (isCancelled) {
+                    DownloadManager.updateState(DownloadState.Cancelled)
+                }
+
                 @Suppress("DEPRECATION")
                 stopForeground(true)
                 stopSelf()
@@ -142,8 +193,7 @@ class DownloadService : Service() {
         }
     }
 
-    private fun cancelDownload() {
-        isCancelled = true
+    private fun stopProcess() {
         serviceScope.launch {
             try {
                 YoutubeDL.getInstance().destroyProcessById("downloader_process")
@@ -156,9 +206,10 @@ class DownloadService : Service() {
     private fun createNotification(status: String, progress: Int): NotificationCompat.Builder {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("VideoFetcher")
+            .setContentTitle("Downloading Video...")
             .setContentText(status)
-            .setProgress(100, progress, progress == 0) // progress == 0 makes it an indeterminate loading bar initially
+            .setProgress(100, progress, false) // Solid progress bar right from 0%
+            .setColor(android.graphics.Color.parseColor("#2196F3")) // Standard Download Blue
             .setOngoing(true)
             .setOnlyAlertOnce(true)
     }

@@ -1,6 +1,7 @@
 package com.videofetcher
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.media.MediaScannerConnection
 import android.media.MediaMetadataRetriever
@@ -23,11 +24,13 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 
 class DownloaderViewModel : ViewModel() {
-    private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Initializing)
-    val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
+    val downloadState: StateFlow<DownloadState> = DownloadManager.downloadState
 
     private val _filesListState = MutableStateFlow<FilesListState>(FilesListState.Idle)
     val filesListState: StateFlow<FilesListState> = _filesListState.asStateFlow()
+
+    private val _pausedDownloads = MutableStateFlow<List<PausedDownload>>(emptyList())
+    val pausedDownloads: StateFlow<List<PausedDownload>> = _pausedDownloads.asStateFlow()
 
     private val baseDirName = "VideoFetcher"
 
@@ -36,121 +39,54 @@ class DownloaderViewModel : ViewModel() {
             try {
                 YoutubeDL.getInstance().init(context)
                 FFmpeg.getInstance().init(context)
-                _downloadState.value = DownloadState.Idle
+                if (DownloadManager.downloadState.value is DownloadState.Initializing) {
+                    DownloadManager.updateState(DownloadState.Idle)
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
-                _downloadState.value = DownloadState.Error("Engine failed to boot: ${e.message}")
+                DownloadManager.updateState(DownloadState.Error("Engine failed to boot: ${e.message}"))
             }
         }
     }
 
     fun startDownload(url: String, quality: String, context: Context) {
         if (url.isBlank()) {
-            _downloadState.value = DownloadState.Error("URL cannot be empty")
+            DownloadManager.updateState(DownloadState.Error("URL cannot be empty"))
             return
         }
 
-        _downloadState.value = DownloadState.Downloading(0f, "Starting...")
-
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                
-                // Target: Downloads/VideoFetcher
-                val targetDir = File(downloadsDir, baseDirName)
-                if (!targetDir.exists()) {
-                    if (!targetDir.mkdirs()) {
-                        throw Exception("Could not create target directory: ${targetDir.absolutePath}")
-                    }
-                }
-
-                val request = YoutubeDLRequest(url)
-                val resolution = quality.replace("p", "")
-                
-                // This is the clean signature we add to the end: (1080p)
-                val resolutionSignature = "(${resolution}p)"
-
-                request.addOption("-f", "bestvideo[height<=$resolution]+bestaudio/best")
-                request.addOption("--merge-output-format", "mp4")
-                request.addOption("--restrict-filenames")
-                
-                // Saves as: /path/Video_Title_(1080p).mp4 
-                request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}.%(ext)s")
-
-                var lastUpdateTime = 0L
-                var lastProgress = -1f
-
-                YoutubeDL.getInstance().execute(request, "downloader_process") { progress, etaInSeconds, line ->
-                    val isConverting = line.contains("[ffmpeg]") || line.contains("Merging") || progress >= 100f
-                    val currentTime = System.currentTimeMillis()
-
-                    // Throttle updates: Only update if converting, finished, or 300ms have passed with new progress
-                    if (isConverting || progress >= 100f || (currentTime - lastUpdateTime > 300 && progress != lastProgress)) {
-                        lastUpdateTime = currentTime
-                        lastProgress = progress
-
-                        val currentStatus = if (isConverting) {
-                            "Converting & Merging to MP4... Please wait"
-                        } else {
-                            "Downloading: ${String.format("%.1f", progress)}% (ETA: ${etaInSeconds}s)"
-                        }
-
-                        _downloadState.value = DownloadState.Downloading(
-                            progress = if (isConverting) 1f else (progress / 100f),
-                            status = currentStatus
-                        )
-                    }
-                }
-
-                // Check if it was manually cancelled
-                if (_downloadState.value !is DownloadState.Cancelled) {
-                    _downloadState.value = DownloadState.Success("Video successfully saved!")
-
-                    // Find the newest file in the directory (the one we just downloaded)
-                    val newFile = targetDir.listFiles()?.maxByOrNull { it.lastModified() }
-                    if (newFile != null) {
-                        // Trigger a media scan to make the video appear in the gallery immediately
-                        MediaScannerConnection.scanFile(context, arrayOf(newFile.absolutePath), null, null)
-                    }
-
-                    fetchDownloadedFiles(context)
-                }
-				
-                
-            } catch (e: Exception) {
-                // 1. If the user clicked Cancel, ignore the resulting crash
-                if (_downloadState.value is DownloadState.Cancelled || e.message?.contains("Process destroyed") == true) {
-                    _downloadState.value = DownloadState.Cancelled
-                    return@launch
-                }
-
-                // Log the real, ugly error to the console just in case you need to debug it later
-                e.printStackTrace()
-
-                // 2. Smart Error Mapper: Translate raw terminal errors into friendly UI messages
-                val rawError = e.message ?: ""
-                val friendlyMessage = when {
-                    rawError.contains("is not a valid URL", ignoreCase = true) -> "The link provided is not a valid video URL."
-                    rawError.contains("Unsupported URL", ignoreCase = true) -> "We don't support downloading from this website yet."
-                    rawError.contains("Sign in", ignoreCase = true) || rawError.contains("login", ignoreCase = true) -> "Login required. Tip: Don't copy-paste the link. Instead, use the 'Share with this app' button and choose VideoFetcher!"
-                    rawError.contains("Not Found", ignoreCase = true) || rawError.contains("404", ignoreCase = true) -> "Video not found. The link might be broken or private."
-                    else -> "Couldn't download this video. Please check the link and try again."
-                }
-
-                _downloadState.value = DownloadState.Error(friendlyMessage)
-            }
+        val serviceIntent = Intent(context, DownloadService::class.java).apply {
+            putExtra("URL", url)
+            putExtra("QUALITY", quality)
         }
+        context.startService(serviceIntent)
     }
 
-    fun cancelDownload() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                YoutubeDL.getInstance().destroyProcessById("downloader_process")
-                _downloadState.value = DownloadState.Cancelled
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+    fun cancelDownload(context: Context) {
+        val intent = Intent(context, DownloadService::class.java).apply {
+            action = "CANCEL_DOWNLOAD"
         }
+        context.startService(intent)
+    }
+
+    fun fetchPausedDownloads(context: Context) {
+        _pausedDownloads.value = PauseRepository(context).getAllPausedDownloads()
+    }
+
+    fun pauseDownload(context: Context) {
+        val intent = Intent(context, DownloadService::class.java).apply { action = "PAUSE_DOWNLOAD" }
+        context.startService(intent)
+    }
+
+    fun resumeDownload(context: Context, url: String, quality: String) {
+        PauseRepository(context).removePausedDownload(url)
+        fetchPausedDownloads(context)
+        startDownload(url, quality, context)
+    }
+
+    fun cancelPausedDownload(context: Context, url: String) {
+        PauseRepository(context).removePausedDownload(url)
+        fetchPausedDownloads(context)
     }
 
     fun fetchDownloadedFiles(context: Context?) {
@@ -286,6 +222,6 @@ class DownloaderViewModel : ViewModel() {
     }
 
     fun resetState() {
-        _downloadState.value = DownloadState.Idle
+        DownloadManager.updateState(DownloadState.Idle)
     }
 }
