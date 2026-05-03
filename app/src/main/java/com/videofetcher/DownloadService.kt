@@ -103,6 +103,9 @@ class DownloadService : Service() {
                 request.addOption("--merge-output-format", "mp4")
                 request.addOption("--restrict-filenames")
                 request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}.%(ext)s")
+                
+                // Force multi-threaded downloading for DASH streams to prevent throttling
+                request.addOption("--concurrent-fragments", "4")
 
                 var lastUpdateTime = 0L
                 var lastProgress = -1f

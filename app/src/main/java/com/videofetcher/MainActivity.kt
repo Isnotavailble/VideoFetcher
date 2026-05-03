@@ -14,7 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import com.videofetcher.settings.SettingsManager
 import com.videofetcher.theme.VideoFetcherTheme
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -40,8 +40,20 @@ class MainActivity : ComponentActivity() {
             val isDarkTheme by settingsManager.isDark.collectAsState(initial = false)
             val scope = rememberCoroutineScope()
 
+            // INSTANTLY paint the native window background before Compose draws the next frame.
+            // This completely hides the 1-frame buffer drop caused by the MIUI shield.
+            val windowBackgroundColor = if (isDarkTheme) {
+                android.graphics.Color.parseColor("#000000") // Match Dark background
+            } else {
+                android.graphics.Color.parseColor("#FEFEFE") // Match Light background
+            }
+            window.decorView.setBackgroundColor(windowBackgroundColor)
+
             VideoFetcherTheme(darkTheme = isDarkTheme) {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Surface(
+                    modifier = Modifier.fillMaxSize().graphicsLayer { alpha = 0.99f }, // Shield the entire screen
+                    color = MaterialTheme.colorScheme.background
+                ) {
                     VideoDownloaderUI(
                         sharedUrl = sharedUrlState.value,
                         isDarkTheme = isDarkTheme,

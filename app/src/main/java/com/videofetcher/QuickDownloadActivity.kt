@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,6 +101,7 @@ class QuickDownloadActivity : ComponentActivity() {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .graphicsLayer { alpha = 0.99f } // Shield the entire Bottom Sheet
                             .padding(horizontal = 24.dp, vertical = 16.dp),
                         horizontalAlignment = Alignment.Start
                     ) {
@@ -134,7 +136,8 @@ class QuickDownloadActivity : ComponentActivity() {
                                     shape = RoundedCornerShape(8.dp),
                                     color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
                                     border = BorderStroke(1.dp, Color.Transparent),
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier
+                                        .weight(1f)
                                 ) {
                                     Text(
                                         text = format,
@@ -177,7 +180,9 @@ class QuickDownloadActivity : ComponentActivity() {
                                     permissionLauncher.launch(permissionsToRequest)
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth().height(56.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.primary, 
                                 contentColor = MaterialTheme.colorScheme.onPrimary

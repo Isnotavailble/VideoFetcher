@@ -31,7 +31,7 @@ android {
             isEnable = true
             reset()
             // Build for both 32-bit and 64-bit ARM CPUs (armeabi-v7a and arm64-v8a)
-            include("armeabi-v7a")
+            include("arm64-v8a","armeabi-v7a")
             isUniversalApk = false // Prevents the creation of the massive 200MB file
         }
     }

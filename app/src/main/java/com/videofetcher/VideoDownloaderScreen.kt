@@ -94,7 +94,6 @@ fun VideoDownloaderUI(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
             .padding(24.dp)
     ) {
         // --- HEADER WITH THEME TOGGLE ---
@@ -133,15 +132,24 @@ fun VideoDownloaderUI(
                 url = it
                 if (state is DownloadState.Error || state is DownloadState.Cancelled) viewModel.resetState()
             },
-            placeholder = { Text("https://...", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)) },
-            textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onSurface),
-            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("https://...") },
+            textStyle = LocalTextStyle.current,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(inputContainerColor, RoundedCornerShape(8.dp)), // Bypass internal Compose animation lag
             singleLine = true,
             enabled = isReady,
             colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = inputContainerColor,
-                unfocusedContainerColor = inputContainerColor,
-                disabledContainerColor = inputContainerColor,
+                focusedContainerColor = Color.Transparent, // Let the modifier background handle this instantly
+                unfocusedContainerColor = Color.Transparent,
+                disabledContainerColor = Color.Transparent,
+                focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                focusedPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                disabledPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                cursorColor = MaterialTheme.colorScheme.primary,
                 focusedBorderColor = Color.Transparent,
                 unfocusedBorderColor = Color.Transparent,
                 disabledBorderColor = Color.Transparent
@@ -165,7 +173,8 @@ fun VideoDownloaderUI(
                     shape = RoundedCornerShape(8.dp),
                     color = if (isSelected && isReady) MaterialTheme.colorScheme.primary else if (!isReady) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surface,
                     border = BorderStroke(1.dp, if (!isReady) Color.Transparent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f),
                     enabled = isReady
                 ) {
                     Text(
@@ -273,7 +282,9 @@ fun VideoDownloaderUI(
                 
                 Button(
                     onClick = { viewModel.cancelDownload(context.applicationContext) },
-                    modifier = Modifier.weight(1f).height(56.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(56.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary),
                     shape = RoundedCornerShape(8.dp)
                 ) {
@@ -285,7 +296,9 @@ fun VideoDownloaderUI(
         } else {
             Button(
                 onClick = { viewModel.startDownload(url, selectedFormat, context.applicationContext) },
-                modifier = Modifier.fillMaxWidth().height(56.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -324,7 +337,7 @@ fun DownloadingVideoCard(downloadState: DownloadState.Downloading) {
             )
             Spacer(modifier = Modifier.height(16.dp))
             LinearProgressIndicator(
-                progress = downloadState.progress,
+                progress = { downloadState.progress },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(8.dp)
@@ -438,7 +451,7 @@ fun StatusCard(state: DownloadState) {
             when (state) {
                 is DownloadState.Success -> {
                     Text(
-                        (state as DownloadState.Success).fileName,
+                        state.fileName, // Removed redundant cast
                         color = Color(0xFF00C853),
                         fontWeight = FontWeight.Bold
                     )
@@ -459,7 +472,7 @@ fun StatusCard(state: DownloadState) {
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            (state as DownloadState.Error).message,
+                            state.message, // Removed redundant cast
                             color = Color.Red,
                             style = MaterialTheme.typography.bodyMedium
                         )
@@ -496,7 +509,7 @@ fun PausedVideoCard(paused: PausedDownload, onResume: () -> Unit, onCancel: () -
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 LinearProgressIndicator(
-                    progress = (paused.progress / 100f).coerceIn(0f, 1f),
+                    progress = { (paused.progress / 100f).coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
