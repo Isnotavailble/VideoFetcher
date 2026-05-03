@@ -35,6 +35,14 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 class QuickDownloadActivity : ComponentActivity() {
     private lateinit var settingsManager: SettingsManager
+
+    // Blindfold MIUI/HyperOS Dark Mode Engine by forcing the Context into Light Mode.
+    override fun attachBaseContext(newBase: android.content.Context) {
+        val newConfig = android.content.res.Configuration(newBase.resources.configuration)
+        newConfig.uiMode = (newConfig.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or android.content.res.Configuration.UI_MODE_NIGHT_NO
+        super.attachBaseContext(newBase.createConfigurationContext(newConfig))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -61,7 +69,11 @@ class QuickDownloadActivity : ComponentActivity() {
         }
 
         setContent {
-            val isDarkTheme by settingsManager.isDark.collectAsState(initial = isSystemInDarkTheme())
+            // Because we forced Light Mode above, isSystemInDarkTheme() will now always return false.
+            // We check the raw global system configuration instead to get the true device state.
+            val systemConfig = android.content.res.Resources.getSystem().configuration
+            val isSystemDark = (systemConfig.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+            val isDarkTheme by settingsManager.isDark.collectAsState(initial = isSystemDark)
 
             VideoFetcherTheme(darkTheme = isDarkTheme) {
                 val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -101,7 +113,6 @@ class QuickDownloadActivity : ComponentActivity() {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .graphicsLayer { alpha = 0.99f } // Shield the entire Bottom Sheet
                             .padding(horizontal = 24.dp, vertical = 16.dp),
                         horizontalAlignment = Alignment.Start
                     ) {

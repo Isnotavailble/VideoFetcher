@@ -23,6 +23,14 @@ class MainActivity : ComponentActivity() {
     private var sharedUrlState = mutableStateOf("")
     private lateinit var settingsManager: SettingsManager
 
+    // Blindfold MIUI/HyperOS Dark Mode Engine by forcing the Context into Light Mode.
+    // This stops the OS from applying "Contrast Enhancements" to text and input boxes.
+    override fun attachBaseContext(newBase: android.content.Context) {
+        val newConfig = android.content.res.Configuration(newBase.resources.configuration)
+        newConfig.uiMode = (newConfig.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or android.content.res.Configuration.UI_MODE_NIGHT_NO
+        super.attachBaseContext(newBase.createConfigurationContext(newConfig))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -51,7 +59,7 @@ class MainActivity : ComponentActivity() {
 
             VideoFetcherTheme(darkTheme = isDarkTheme) {
                 Surface(
-                    modifier = Modifier.fillMaxSize().graphicsLayer { alpha = 0.99f }, // Shield the entire screen
+                    modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     VideoDownloaderUI(
