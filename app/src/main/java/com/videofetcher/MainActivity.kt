@@ -23,21 +23,8 @@ class MainActivity : ComponentActivity() {
     private var sharedUrlState = mutableStateOf("")
     private lateinit var settingsManager: SettingsManager
 
-    // Blindfold MIUI/HyperOS Dark Mode Engine by forcing the Context into Light Mode.
-    // This stops the OS from applying "Contrast Enhancements" to text and input boxes.
-    override fun attachBaseContext(newBase: android.content.Context) {
-        val newConfig = android.content.res.Configuration(newBase.resources.configuration)
-        newConfig.uiMode = (newConfig.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or android.content.res.Configuration.UI_MODE_NIGHT_NO
-        super.attachBaseContext(newBase.createConfigurationContext(newConfig))
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Stop system from force-inverting explicit colors (Fixes the white header bug on Xiaomi/Samsung)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            window.decorView.isForceDarkAllowed = false
-        }
 
         settingsManager = SettingsManager(applicationContext)
 

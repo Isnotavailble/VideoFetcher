@@ -36,21 +36,9 @@ import kotlinx.coroutines.launch
 class QuickDownloadActivity : ComponentActivity() {
     private lateinit var settingsManager: SettingsManager
 
-    // Blindfold MIUI/HyperOS Dark Mode Engine by forcing the Context into Light Mode.
-    override fun attachBaseContext(newBase: android.content.Context) {
-        val newConfig = android.content.res.Configuration(newBase.resources.configuration)
-        newConfig.uiMode = (newConfig.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or android.content.res.Configuration.UI_MODE_NIGHT_NO
-        super.attachBaseContext(newBase.createConfigurationContext(newConfig))
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Stop system from force-inverting explicit colors (Fixes the white header bug on Xiaomi/Samsung)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            window.decorView.isForceDarkAllowed = false
-        }
-
         settingsManager = SettingsManager(applicationContext)
 
         var sharedUrl = ""
@@ -69,10 +57,7 @@ class QuickDownloadActivity : ComponentActivity() {
         }
 
         setContent {
-            // Because we forced Light Mode above, isSystemInDarkTheme() will now always return false.
-            // We check the raw global system configuration instead to get the true device state.
-            val systemConfig = android.content.res.Resources.getSystem().configuration
-            val isSystemDark = (systemConfig.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+            val isSystemDark = isSystemInDarkTheme()
             val isDarkTheme by settingsManager.isDark.collectAsState(initial = isSystemDark)
 
             VideoFetcherTheme(darkTheme = isDarkTheme) {

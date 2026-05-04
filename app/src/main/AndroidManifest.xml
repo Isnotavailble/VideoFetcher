@@ -16,7 +16,7 @@
         android:allowBackup="true"
         android:label="Video Fetcher"
         android:extractNativeLibs="true" 
-        android:theme="@android:style/Theme.NoTitleBar">
+        android:theme="@style/Theme.VideoFetcher">
         
         <activity
             android:name=".MainActivity"
@@ -34,7 +34,7 @@
         <activity
             android:name=".QuickDownloadActivity"
             android:exported="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            android:theme="@style/Theme.VideoFetcher.Translucent">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
