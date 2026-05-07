@@ -7,7 +7,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -34,7 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import coil.transform.RoundedCornersTransformation
 import kotlinx.coroutines.delay
@@ -107,6 +109,8 @@ fun VideoDownloaderUI(
         if (missingPermissions.isNotEmpty()) {
             delay(300) // Ensure Activity is fully resumed before requesting
             permissionLauncher.launch(missingPermissions)
+        } else {
+            viewModel.fetchDownloadedFiles(context.applicationContext)
         }
     }
 
@@ -177,7 +181,7 @@ fun VideoDownloaderUI(
                     context = context
                 )
                 AppTab.FILES -> FilesContent(pausedDownloads, filesListState, viewModel, context)
-                AppTab.SETTINGS -> SettingsContent(isDarkTheme, onThemeToggle)
+                AppTab.SETTINGS -> SettingsContent(isDarkTheme, onThemeToggle, viewModel, context)
             }
         }
     }
@@ -313,6 +317,7 @@ fun HomeContent(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FilesContent(
     pausedDownloads: List<PausedDownload>,
@@ -320,40 +325,62 @@ fun FilesContent(
     viewModel: DownloaderViewModel,
     context: android.content.Context
 ) {
-    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
-        item { Text("My Files", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface) }
-        item { Spacer(modifier = Modifier.height(24.dp)) }
+    Column(modifier = Modifier.fillMaxSize()) {
+        Text("My Files", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
+        Spacer(modifier = Modifier.height(24.dp))
         
-        if (pausedDownloads.isNotEmpty()) {
-            item { Text("Paused Videos", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(bottom = 8.dp)) }
-            items(items = pausedDownloads, key = { it.url }) { paused ->
-                PausedVideoCard(
-                    paused = paused,
-                    onResume = { viewModel.resumeDownload(context.applicationContext, paused.url, paused.quality) },
-                    onCancel = { viewModel.cancelPausedDownload(context.applicationContext, paused.url) }
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-        }
-
-        when (val filesList = filesListState) {
-            is FilesListState.Success -> {
-                if (filesList.files.isNotEmpty()) {
-                    item { Text("Downloaded Videos", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(bottom = 8.dp)) }
-                } else if (pausedDownloads.isEmpty()) {
-                    item { Text("No downloads yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)) }
+        LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(bottom = 16.dp)) {
+            if (pausedDownloads.isNotEmpty()) {
+                item { Text("Paused Videos", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(bottom = 8.dp)) }
+                items(items = pausedDownloads, key = { it.url }) { paused ->
+                    PausedVideoCard(
+                        paused = paused,
+                        onResume = { viewModel.resumeDownload(context.applicationContext, paused.url, paused.quality) },
+                        onCancel = { viewModel.cancelPausedDownload(context.applicationContext, paused.url) }
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
-                items(items = filesList.files, key = { it.path }) { file -> DownloadedVideoCard(file); Spacer(modifier = Modifier.height(16.dp)) }
             }
-            is FilesListState.Error -> { item { ErrorCard(filesList.message) } }
-            is FilesListState.Fetching -> { item { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) } }
-            else -> {}
+
+            when (val filesList = filesListState) {
+                is FilesListState.Success -> {
+                    if (filesList.files.isNotEmpty()) {
+                        stickyHeader {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(MaterialTheme.colorScheme.background)
+                                    .padding(vertical = 8.dp)
+                            ) {
+                                Text("Downloaded Videos", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                    } else if (pausedDownloads.isEmpty()) {
+                        item { Text("No downloads yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)) }
+                    }
+                    items(items = filesList.files, key = { it.path }) { file ->
+                        DownloadedVideoCard(
+                            file = file,
+                            viewModel = viewModel,
+                            context = context
+                        )
+                    }
+                }
+                is FilesListState.Error -> { item { ErrorCard(filesList.message) } }
+                is FilesListState.Fetching -> { item { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) } }
+                else -> {}
+            }
         }
     }
 }
 
 @Composable
-fun SettingsContent(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
+fun SettingsContent(
+    isDarkTheme: Boolean, 
+    onThemeToggle: () -> Unit,
+    viewModel: DownloaderViewModel,
+    context: android.content.Context
+) {
     Column(modifier = Modifier.fillMaxSize()) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
         Spacer(modifier = Modifier.height(24.dp))
@@ -389,18 +416,17 @@ fun SettingsContent(isDarkTheme: Boolean, onThemeToggle: () -> Unit) {
         Spacer(modifier = Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.Delete, contentDescription = "Clear Cache", tint = MaterialTheme.colorScheme.onSurface)
-                Spacer(modifier = Modifier.width(16.dp))
-                Column {
-                    Text("Clear Thumbnail Cache", color = MaterialTheme.colorScheme.onSurface)
-                    Text("Frees up storage space", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp)
-                }
+            Icon(Icons.Filled.Delete, contentDescription = "Clear Cache", tint = MaterialTheme.colorScheme.onSurface)
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Clear Thumbnail", color = MaterialTheme.colorScheme.onSurface)
+                Text("Frees up storage space", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp)
             }
+            Spacer(modifier = Modifier.width(16.dp))
             Button(
-                onClick = { /* TODO: Wire up clear cache */ }, 
+                onClick = { viewModel.clearThumbnailCache(context) }, 
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
             ) { Text("CLEAR") }
@@ -500,48 +526,42 @@ fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: Dow
 }
 
 @Composable
-fun DownloadedVideoCard(file: DownloadedFileDetails) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-    ) {
+fun DownloadedVideoCard(
+    file: DownloadedFileDetails,
+    viewModel: DownloaderViewModel,
+    context: android.content.Context
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+
         Row(
             modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
+                .clickable { viewModel.playVideo(context, file) }
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (file.thumbnailUri != Uri.EMPTY) {
-                AsyncImage(
+            Box(contentAlignment = Alignment.Center) {
+                SubcomposeAsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
-                        .data(file.thumbnailUri)
+                        .data(if (file.thumbnailUri == Uri.EMPTY) null else file.thumbnailUri)
                         .crossfade(true)
-                        .transformations(RoundedCornersTransformation(16f))
                         .build(),
                     contentDescription = "Video Thumbnail",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .size(64.dp)
-                        .clip(RoundedCornerShape(8.dp))
+                        .size(80.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                    loading = {
+                        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                        }
+                    },
+                    error = {
+                        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                        }
+                    }
                 )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.PlayArrow,
-                        contentDescription = "No Thumbnail",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
             }
 
             Spacer(modifier = Modifier.width(16.dp))
@@ -551,24 +571,51 @@ fun DownloadedVideoCard(file: DownloadedFileDetails) {
                     text = file.title,
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp,
+                    lineHeight = 18.sp,
                     maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = file.signature,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                    fontSize = 12.sp
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
                 )
-                Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "${file.duration} | ${file.size}",
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    fontSize = 12.sp
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
                 )
             }
+
+            Box {
+                IconButton(onClick = { menuExpanded = true }) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = "More options",
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { 
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.Share, contentDescription = "Share", modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Share") 
+                            }
+                        },
+                        onClick = { viewModel.shareVideo(context, file); menuExpanded = false }
+                    )
+                }
+            }
         }
-    }
 }
 
 @Composable

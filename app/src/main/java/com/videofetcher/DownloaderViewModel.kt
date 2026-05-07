@@ -1,12 +1,14 @@
 package com.videofetcher
 
 import android.content.Context
+import android.content.ContentUris
 import android.content.Intent
 import android.graphics.Bitmap
 import android.media.MediaScannerConnection
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Environment
+import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -19,6 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileInputStream
@@ -238,6 +241,60 @@ class DownloaderViewModel : ViewModel() {
             String.format("%02d:%02d:%02d", hours, minutes, seconds)
         } else {
             String.format("%02d:%02d", minutes, seconds)
+        }
+    }
+
+    fun playVideo(context: Context, fileDetails: DownloadedFileDetails) {
+        try {
+            val file = File(fileDetails.path)
+            if (!file.exists()) return
+
+            val authority = "${context.packageName}.fileprovider"
+            val uri = FileProvider.getUriForFile(context, authority, file)
+
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "video/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "Play with..."))
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // Optionally, show a toast or update a state with the error
+        }
+    }
+
+    fun shareVideo(context: Context, fileDetails: DownloadedFileDetails) {
+        try {
+            val file = File(fileDetails.path)
+            if (!file.exists()) return
+
+            val authority = "${context.packageName}.fileprovider"
+            val uri = FileProvider.getUriForFile(context, authority, file)
+
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "video/*"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "Share video..."))
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun clearThumbnailCache(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val thumbCacheDir = File(context.cacheDir, "thumbnails")
+                if (thumbCacheDir.exists() && thumbCacheDir.isDirectory) {
+                    thumbCacheDir.listFiles()?.forEach { it.delete() }
+                }
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Thumbnail cache cleared", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
