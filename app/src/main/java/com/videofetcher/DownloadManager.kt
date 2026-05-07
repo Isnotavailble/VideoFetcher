@@ -5,14 +5,26 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 object DownloadManager {
-    private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Initializing)
-    val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
+    private val _engineState = MutableStateFlow<EngineState>(EngineState.Initializing)
+    val engineState: StateFlow<EngineState> = _engineState.asStateFlow()
 
-    fun updateState(state: DownloadState) {
-        _downloadState.value = state
+    // Map of active/queued downloads keyed by URL
+    private val _activeDownloads = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
+    val activeDownloads: StateFlow<Map<String, DownloadState>> = _activeDownloads.asStateFlow()
+
+    fun updateEngineState(state: EngineState) {
+        _engineState.value = state
     }
 
-    fun isDownloading(): Boolean {
-        return _downloadState.value is DownloadState.Downloading
+    fun updateDownloadState(url: String, state: DownloadState) {
+        val current = _activeDownloads.value.toMutableMap()
+        current[url] = state
+        _activeDownloads.value = current
+    }
+
+    fun removeDownload(url: String) {
+        val current = _activeDownloads.value.toMutableMap()
+        current.remove(url)
+        _activeDownloads.value = current
     }
 }

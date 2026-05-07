@@ -14,6 +14,7 @@ import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,7 +25,8 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 
 class DownloaderViewModel : ViewModel() {
-    val downloadState: StateFlow<DownloadState> = DownloadManager.downloadState
+    val engineState: StateFlow<EngineState> = DownloadManager.engineState
+    val activeDownloads: StateFlow<Map<String, DownloadState>> = DownloadManager.activeDownloads
 
     private val _filesListState = MutableStateFlow<FilesListState>(FilesListState.Idle)
     val filesListState: StateFlow<FilesListState> = _filesListState.asStateFlow()
@@ -33,49 +35,52 @@ class DownloaderViewModel : ViewModel() {
     val pausedDownloads: StateFlow<List<PausedDownload>> = _pausedDownloads.asStateFlow()
 
     private val baseDirName = "VideoFetcher"
+    private var fetchJob: Job? = null
 
     fun initializeEngine(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 YoutubeDL.getInstance().init(context)
                 FFmpeg.getInstance().init(context)
-                if (DownloadManager.downloadState.value is DownloadState.Initializing) {
-                    DownloadManager.updateState(DownloadState.Idle)
+                if (DownloadManager.engineState.value is EngineState.Initializing) {
+                    DownloadManager.updateEngineState(EngineState.Idle)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
-                DownloadManager.updateState(DownloadState.Error("Engine failed to boot: ${e.message}"))
+                DownloadManager.updateEngineState(EngineState.Error("Engine failed to boot: ${e.message}"))
             }
         }
     }
 
     fun startDownload(url: String, quality: String, context: Context) {
-        if (url.isBlank()) {
-            DownloadManager.updateState(DownloadState.Error("URL cannot be empty"))
-            return
-        }
+        if (url.isBlank()) return
 
         val serviceIntent = Intent(context, DownloadService::class.java).apply {
+            action = "START_DOWNLOAD"
             putExtra("URL", url)
             putExtra("QUALITY", quality)
         }
         context.startService(serviceIntent)
     }
 
-    fun cancelDownload(context: Context) {
+    fun pauseDownload(context: Context, url: String) {
+        val intent = Intent(context, DownloadService::class.java).apply { 
+            action = "PAUSE_DOWNLOAD" 
+            putExtra("URL", url)
+        }
+        context.startService(intent)
+    }
+
+    fun cancelDownload(context: Context, url: String) {
         val intent = Intent(context, DownloadService::class.java).apply {
             action = "CANCEL_DOWNLOAD"
+            putExtra("URL", url)
         }
         context.startService(intent)
     }
 
     fun fetchPausedDownloads(context: Context) {
         _pausedDownloads.value = PauseRepository(context).getAllPausedDownloads()
-    }
-
-    fun pauseDownload(context: Context) {
-        val intent = Intent(context, DownloadService::class.java).apply { action = "PAUSE_DOWNLOAD" }
-        context.startService(intent)
     }
 
     fun resumeDownload(context: Context, url: String, quality: String) {
@@ -89,9 +94,12 @@ class DownloaderViewModel : ViewModel() {
         fetchPausedDownloads(context)
     }
 
-    fun fetchDownloadedFiles(context: Context?) {
-        _filesListState.value = FilesListState.Fetching
-        viewModelScope.launch(Dispatchers.IO) {
+    fun fetchDownloadedFiles(context: Context?): Job? {
+        fetchJob?.cancel()
+        fetchJob = viewModelScope.launch(Dispatchers.IO) {
+            if (_filesListState.value !is FilesListState.Success) {
+                _filesListState.value = FilesListState.Fetching
+            }
             try {
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                 val targetDir = File(downloadsDir, baseDirName)
@@ -110,18 +118,24 @@ class DownloaderViewModel : ViewModel() {
                     thumbCacheDir.mkdirs()
                 }
 
+                // Grab existing loaded files to prevent overwriting them with placeholders
+                val currentSuccessState = _filesListState.value as? FilesListState.Success
+                val existingFilesMap = currentSuccessState?.files?.associateBy { it.path } ?: emptyMap()
+
                 // STEP 1: Fast load - Instantly show files without waiting for heavy extraction
                 val initialList = files.map { file ->
-                    val (title, signature) = parseFileName(file.name)
-                    val thumbFile = File(thumbCacheDir, "${file.name}.png")
-                    DownloadedFileDetails(
-                        title = title,
-                        path = file.absolutePath,
-                        signature = signature,
-                        size = formatFileSize(file.length()),
-                        duration = "--:--", // Placeholder, will be updated lazily
-                        thumbnailUri = if (thumbFile.exists()) Uri.fromFile(thumbFile) else Uri.EMPTY
-                    )
+                    existingFilesMap[file.absolutePath] ?: run {
+                        val (title, signature) = parseFileName(file.name)
+                        val thumbFile = File(thumbCacheDir, "${file.name}.png")
+                        DownloadedFileDetails(
+                            title = title,
+                            path = file.absolutePath,
+                            signature = signature,
+                            size = formatFileSize(file.length()),
+                            duration = "--:--", // Placeholder, will be updated lazily
+                            thumbnailUri = if (thumbFile.exists()) Uri.fromFile(thumbFile) else Uri.EMPTY
+                        )
+                    }
                 }.toMutableList()
 
                 // Immediately update UI with names and sizes
@@ -129,6 +143,11 @@ class DownloaderViewModel : ViewModel() {
 
                 // STEP 2: Lazy processing - Fetch durations and missing thumbnails in background
                 for (i in files.indices) {
+                    // Skip expensive processing if we already have a valid duration and thumbnail!
+                    if (initialList[i].duration != "--:--" && initialList[i].thumbnailUri != Uri.EMPTY) {
+                        continue
+                    }
+
                     val file = files[i]
                     val thumbFile = File(thumbCacheDir, "${file.name}.png")
                     var updatedUri = initialList[i].thumbnailUri
@@ -183,6 +202,7 @@ class DownloaderViewModel : ViewModel() {
                 _filesListState.value = FilesListState.Error("Failed to scan directory: ${e.message}")
             }
         }
+        return fetchJob
     }
     
     // PARSING LOGIC: Extracts clean title and (Resolution)
@@ -221,7 +241,7 @@ class DownloaderViewModel : ViewModel() {
         }
     }
 
-    fun resetState() {
-        DownloadManager.updateState(DownloadState.Idle)
+    fun resetState(url: String) {
+        DownloadManager.removeDownload(url)
     }
 }

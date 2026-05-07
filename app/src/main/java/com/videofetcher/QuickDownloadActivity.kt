@@ -76,6 +76,7 @@ class QuickDownloadActivity : ComponentActivity() {
                         Toast.makeText(context, "VideoFetcher: Downloading...", Toast.LENGTH_SHORT).show()
                         scope.launch {
                             val serviceIntent = Intent(context, DownloadService::class.java).apply {
+                                action = "START_DOWNLOAD"
                                 putExtra("URL", sharedUrl)
                                 putExtra("QUALITY", selectedFormat)
                             }
@@ -164,6 +165,7 @@ class QuickDownloadActivity : ComponentActivity() {
                                     Toast.makeText(context, "VideoFetcher: Downloading...", Toast.LENGTH_SHORT).show()
                                     scope.launch {
                                         val serviceIntent = Intent(context, DownloadService::class.java).apply {
+                                            action = "START_DOWNLOAD"
                                             putExtra("URL", sharedUrl)
                                             putExtra("QUALITY", selectedFormat)
                                         }
