@@ -33,6 +33,9 @@ import com.videofetcher.theme.VideoFetcherTheme
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import com.yausername.ffmpeg.FFmpeg
+import com.yausername.youtubedl_android.YoutubeDL
 
 @OptIn(ExperimentalMaterial3Api::class)
 class QuickDownloadActivity : ComponentActivity() {
@@ -63,6 +66,19 @@ class QuickDownloadActivity : ComponentActivity() {
 
         setContent {
             val isDarkTheme by settingsManager.isDark.collectAsState(initial = initialDarkTheme)
+
+            // HEAD START: Silently initialize the engine while the user is looking at the UI.
+            // If they are fast, the Service will finish it. If they are slow, it will be ready!
+            LaunchedEffect(Unit) {
+                launch(Dispatchers.IO) {
+                    try {
+                        YoutubeDL.getInstance().init(applicationContext)
+                        FFmpeg.getInstance().init(applicationContext)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
 
             VideoFetcherTheme(darkTheme = isDarkTheme) {
                 val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)

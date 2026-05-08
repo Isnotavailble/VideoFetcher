@@ -304,12 +304,33 @@ class DownloaderViewModel : ViewModel() {
             val file = File(fileDetails.path)
             if (!file.exists()) return
 
-            val authority = "${context.packageName}.fileprovider"
-            val uri = FileProvider.getUriForFile(context, authority, file)
+            var mediaStoreUri: Uri? = null
+
+            // Step 1: Try to get the native MediaStore Gallery URI (Social Media apps prefer this for video previews)
+            try {
+                val projection = arrayOf(MediaStore.Video.Media._ID)
+                val selection = "${MediaStore.Video.Media.DATA} = ?"
+                val selectionArgs = arrayOf(file.absolutePath)
+                
+                context.contentResolver.query(
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                    projection, selection, selectionArgs, null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID))
+                        mediaStoreUri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            // Step 2: Fallback to FileProvider if the video hasn't been scanned by MediaStore yet
+            val finalUri = mediaStoreUri ?: FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
 
             val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "video/*"
-                putExtra(Intent.EXTRA_STREAM, uri)
+                type = "video/mp4" // Be strictly specific so Telegram/WhatsApp don't fallback to "file" mode
+                putExtra(Intent.EXTRA_STREAM, finalUri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(Intent.createChooser(intent, "Share video..."))

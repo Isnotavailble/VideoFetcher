@@ -13,6 +13,9 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.clickable
@@ -99,6 +102,21 @@ fun VideoDownloaderUI(
         }
     }
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var hasStoragePermission by remember { mutableStateOf(false) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasStoragePermission = storagePermissions.all {
+                    ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val notificationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) {
@@ -108,12 +126,26 @@ fun VideoDownloaderUI(
     val storageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        // Once storage is handled, check notifications on Android 13+
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && 
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            viewModel.fetchDownloadedFiles(context.applicationContext)
+        hasStoragePermission = storagePermissions.all {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        }
+        
+        if (hasStoragePermission) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && 
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                viewModel.fetchDownloadedFiles(context.applicationContext)
+            }
+        }
+    }
+
+    val requestStoragePermission = {
+        val missingStorage = storagePermissions.filter {
+            ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
+        if (missingStorage.isNotEmpty()) {
+            storageLauncher.launch(missingStorage)
         }
     }
 
@@ -125,11 +157,11 @@ fun VideoDownloaderUI(
         }.toTypedArray()
 
         if (missingStorage.isNotEmpty()) {
-            delay(300) // Ensure Activity is fully resumed before requesting
+            delay(500) // Increased delay to ensure UI is fully painted before requesting
             storageLauncher.launch(missingStorage)
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && 
                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            delay(300)
+            delay(500)
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             viewModel.fetchDownloadedFiles(context.applicationContext)
@@ -200,9 +232,11 @@ fun VideoDownloaderUI(
                     isReady = isReady,
                     viewModel = viewModel,
                     clipboardManager = clipboardManager,
-                    context = context
+                    context = context,
+                    hasStoragePermission = hasStoragePermission,
+                    onRequestPermission = requestStoragePermission
                 )
-                AppTab.FILES -> FilesContent(pausedDownloads, filesListState, viewModel, context)
+                AppTab.FILES -> FilesContent(pausedDownloads, filesListState, viewModel, context, hasStoragePermission, requestStoragePermission)
                 AppTab.SETTINGS -> SettingsContent(isDarkTheme, onThemeToggle, viewModel, context)
             }
         }
@@ -221,7 +255,9 @@ fun HomeContent(
     isReady: Boolean,
     viewModel: DownloaderViewModel,
     clipboardManager: androidx.compose.ui.platform.ClipboardManager,
-    context: android.content.Context
+    context: android.content.Context,
+    hasStoragePermission: Boolean,
+    onRequestPermission: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         Text(
@@ -295,8 +331,13 @@ fun HomeContent(
 
         Button(
             onClick = { 
-                viewModel.startDownload(url, selectedFormat, context.applicationContext)
-                onUrlChange("") 
+                if (hasStoragePermission) {
+                    viewModel.startDownload(url, selectedFormat, context.applicationContext)
+                    onUrlChange("") 
+                } else {
+                    onRequestPermission()
+                    Toast.makeText(context, "Storage permission required to download", Toast.LENGTH_SHORT).show()
+                }
             },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             colors = ButtonDefaults.buttonColors(
@@ -363,7 +404,9 @@ fun FilesContent(
     pausedDownloads: List<PausedDownload>,
     filesListState: FilesListState,
     viewModel: DownloaderViewModel,
-    context: android.content.Context
+    context: android.content.Context,
+    hasStoragePermission: Boolean,
+    onRequestPermission: () -> Unit
 ) {
     var fileToConfirmDelete by remember { mutableStateOf<DownloadedFileDetails?>(null) }
 
@@ -472,6 +515,34 @@ fun FilesContent(
         Spacer(modifier = Modifier.height(24.dp))
         
         LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(bottom = 16.dp)) {
+            if (!hasStoragePermission) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(Icons.Filled.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("Storage Permission Missing", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("We need access to your storage to display and manage your downloaded videos.", textAlign = TextAlign.Center, fontSize = 12.sp, color = MaterialTheme.colorScheme.onErrorContainer)
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = onRequestPermission,
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError)
+                            ) {
+                                Text("Grant Permission", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+
             if (pausedDownloads.isNotEmpty()) {
                 item { Text("Paused Videos", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(bottom = 8.dp)) }
                 items(items = pausedDownloads, key = { it.url }) { paused ->

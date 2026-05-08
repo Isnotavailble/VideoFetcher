@@ -84,6 +84,15 @@ class DownloadService : Service() {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             
             try {
+                // SAFETY NET: Ensure engine is initialized before attempting download.
+                // This takes a few seconds on first launch, but is nearly instant on subsequent runs.
+                try {
+                    YoutubeDL.getInstance().init(applicationContext)
+                    FFmpeg.getInstance().init(applicationContext)
+                } catch (e: Exception) {
+                    throw Exception("Failed to initialize engine: ${e.message}")
+                }
+
                 val permissionManager = PermissionManager(applicationContext)
                 val customPath = permissionManager.getCustomDownloadFolderPath()
                 val targetDir = File(customPath)
