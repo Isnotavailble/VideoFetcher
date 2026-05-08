@@ -84,8 +84,9 @@ class DownloadService : Service() {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             
             try {
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val targetDir = File(downloadsDir, "VideoFetcher")
+                val permissionManager = PermissionManager(applicationContext)
+                val customPath = permissionManager.getCustomDownloadFolderPath()
+                val targetDir = File(customPath)
                 if (!targetDir.exists()) targetDir.mkdirs()
 
                 val request = YoutubeDLRequest(url)
@@ -95,7 +96,7 @@ class DownloadService : Service() {
                 request.addOption("-f", "bestvideo[height<=$resolution]+bestaudio/best")
                 request.addOption("--merge-output-format", "mp4")
                 request.addOption("--restrict-filenames")
-                request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}.%(ext)s")
+                request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}_vdf.%(ext)s")
                 request.addOption("--concurrent-fragments", "4")
 
                 var lastUpdateTime = 0L
@@ -139,7 +140,7 @@ class DownloadService : Service() {
                     val successNotification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
                         .setSmallIcon(android.R.drawable.stat_sys_download_done)
                         .setContentTitle("Video Downloaded")
-                        .setContentText("Successfully saved to Downloads/VideoFetcher")
+                        .setContentText("Successfully saved to ${targetDir.name}")
                         .build()
                     notificationManager.notify(notificationId + 1, successNotification)
                     notificationManager.cancel(notificationId)

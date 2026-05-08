@@ -3,11 +3,13 @@ package com.videofetcher
 import android.Manifest
 import android.os.Build
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.clickable
+import android.provider.DocumentsContract
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -78,6 +80,21 @@ fun VideoDownloaderUI(
         }
     }
 
+    // Determine which permissions to ask for based on Android version
+    val permissionsToRequest = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.POST_NOTIFICATIONS
+            )
+        } else {
+            arrayOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            )
+        }
+    }
+
     // Permission Launcher to request access to existing files
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -89,20 +106,7 @@ fun VideoDownloaderUI(
     LaunchedEffect(Unit) {
         viewModel.initializeEngine(context.applicationContext)
         
-        // Determine which permissions to ask for based on Android version
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(
-                Manifest.permission.READ_MEDIA_VIDEO,
-                Manifest.permission.POST_NOTIFICATIONS
-            )
-        } else {
-            arrayOf(
-                Manifest.permission.READ_EXTERNAL_STORAGE,
-                Manifest.permission.WRITE_EXTERNAL_STORAGE
-            )
-        }
-        
-        val missingPermissions = permissions.filter {
+        val missingPermissions = permissionsToRequest.filter {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray()
 
@@ -325,6 +329,108 @@ fun FilesContent(
     viewModel: DownloaderViewModel,
     context: android.content.Context
 ) {
+    var fileToConfirmDelete by remember { mutableStateOf<DownloadedFileDetails?>(null) }
+
+    var fileAwaitingPermission by remember { mutableStateOf<DownloadedFileDetails?>(null) }
+    var showFolderInstructionDialog by remember { mutableStateOf(false) }
+
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val treeDocumentId = DocumentsContract.getTreeDocumentId(uri)
+                // Verify they selected our specific folder
+                if (treeDocumentId.endsWith("VideoFetcher", ignoreCase = true)) {
+                    PermissionManager(context).saveFolderPermission(uri)
+                    
+                    // Permission saved! Automatically retry the deletion silently
+                    fileAwaitingPermission?.let { fileToDelete ->
+                        viewModel.deleteVideo(
+                            context = context.applicationContext,
+                            fileDetails = fileToDelete,
+                            onSuccess = {
+                                Toast.makeText(context, "Video deleted", Toast.LENGTH_SHORT).show()
+                                viewModel.fetchDownloadedFiles(context.applicationContext)
+                            },
+                            onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
+                            onPermissionRequired = { Toast.makeText(context, "Permission error", Toast.LENGTH_SHORT).show() }
+                        )
+                    }
+                } else {
+                    Toast.makeText(context, "Incorrect folder. Please choose 'VideoFetcher'.", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Toast.makeText(context, "Error verifying folder", Toast.LENGTH_SHORT).show()
+            }
+        }
+        fileAwaitingPermission = null
+    }
+
+    if (showFolderInstructionDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showFolderInstructionDialog = false
+                fileAwaitingPermission = null
+            },
+            title = { Text("Grant Folder Access", fontWeight = FontWeight.Bold) },
+            text = { Text("To delete videos downloaded from a previous installation, we need access to the VideoFetcher folder.\n\nPlease tap 'Continue', select the 'VideoFetcher' folder, and tap 'Use this folder'.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showFolderInstructionDialog = false
+                    folderPickerLauncher.launch(null)
+                }) {
+                    Text("Continue", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showFolderInstructionDialog = false
+                    fileAwaitingPermission = null
+                }) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurface)
+                }
+            }
+        )
+    }
+
+    if (fileToConfirmDelete != null) {
+        AlertDialog(
+            onDismissRequest = { fileToConfirmDelete = null },
+            title = { Text("Delete Video", fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to delete '${fileToConfirmDelete?.title}'?\nThis action cannot be undone.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val fileToDelete = fileToConfirmDelete!!
+                        fileToConfirmDelete = null
+                        viewModel.deleteVideo(
+                            context = context.applicationContext,
+                            fileDetails = fileToDelete,
+                            onSuccess = {
+                                Toast.makeText(context, "Video deleted", Toast.LENGTH_SHORT).show()
+                                viewModel.fetchDownloadedFiles(context.applicationContext)
+                            },
+                                onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
+                                onPermissionRequired = {
+                                    fileAwaitingPermission = fileToDelete
+                                    showFolderInstructionDialog = true
+                                }
+                        )
+                    }
+                ) {
+                    Text("Delete", color = Color.Red, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { fileToConfirmDelete = null }) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurface)
+                }
+            }
+        )
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Text("My Files", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
         Spacer(modifier = Modifier.height(24.dp))
@@ -362,7 +468,10 @@ fun FilesContent(
                         DownloadedVideoCard(
                             file = file,
                             viewModel = viewModel,
-                            context = context
+                            context = context,
+                            onDelete = { fileToDelete ->
+                                fileToConfirmDelete = fileToDelete
+                            }
                         )
                     }
                 }
@@ -381,6 +490,24 @@ fun SettingsContent(
     viewModel: DownloaderViewModel,
     context: android.content.Context
 ) {
+    val permissionManager = remember { PermissionManager(context) }
+    var currentPath by remember { mutableStateOf(permissionManager.getCustomDownloadFolderPath()) }
+    
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            val success = permissionManager.saveCustomDownloadFolder(uri)
+            if (success) {
+                currentPath = permissionManager.getCustomDownloadFolderPath()
+                Toast.makeText(context, "Download folder updated!", Toast.LENGTH_SHORT).show()
+                viewModel.fetchDownloadedFiles(context)
+            } else {
+                Toast.makeText(context, "Please select a folder on Internal Storage.", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
         Spacer(modifier = Modifier.height(24.dp))
@@ -414,22 +541,61 @@ fun SettingsContent(
         
         Text("Storage & Cache", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp)
         Spacer(modifier = Modifier.height(8.dp))
+        
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(painterResource(id = R.drawable.ic_folder), contentDescription = "Folder", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(top = 4.dp))
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Download Location", color = MaterialTheme.colorScheme.onSurface)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(currentPath, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                
+                val defaultPath = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "VideoFetcher").absolutePath
+                if (currentPath != defaultPath) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Reset to Default",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable {
+                            permissionManager.resetToDefaultFolder()
+                            currentPath = permissionManager.getCustomDownloadFolderPath()
+                            Toast.makeText(context, "Restored to default folder", Toast.LENGTH_SHORT).show()
+                            viewModel.fetchDownloadedFiles(context)
+                        }.padding(vertical = 4.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Button(
+                onClick = { folderPickerLauncher.launch(null) }, 
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
+                contentPadding = PaddingValues(horizontal = 16.dp)
+            ) { Text("Change", fontWeight = FontWeight.Bold) }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(Icons.Filled.Delete, contentDescription = "Clear Cache", tint = MaterialTheme.colorScheme.onSurface)
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text("Clear Thumbnail", color = MaterialTheme.colorScheme.onSurface)
-                Text("Frees up storage space", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Frees up storage space", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
             }
             Spacer(modifier = Modifier.width(16.dp))
             Button(
                 onClick = { viewModel.clearThumbnailCache(context) }, 
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-            ) { Text("CLEAR") }
+            ) { Text("Clear", fontWeight = FontWeight.Bold) }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
 
@@ -444,81 +610,81 @@ fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: Dow
     val isFinished = downloadState is DownloadState.Success || downloadState is DownloadState.Error || downloadState is DownloadState.Cancelled
     val isDownloading = downloadState is DownloadState.Downloading
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = if (isFinished) 16.dp else 0.dp).fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.PlayArrow,
-                        contentDescription = "Thumbnail Placeholder",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                        modifier = Modifier.size(32.dp)
-                    )
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Thumbnail Placeholder",
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            
+            Column(modifier = Modifier.weight(1f)) {
+                val (titleText, titleColor) = when (downloadState) {
+                    is DownloadState.Queued -> "Queued" to MaterialTheme.colorScheme.onSurface
+                    is DownloadState.Downloading -> "Downloading..." to MaterialTheme.colorScheme.primary
+                    is DownloadState.Success -> "Completed" to Color(0xFF00C853) // Green
+                    is DownloadState.Error -> "Failed" to Color.Red
+                    is DownloadState.Cancelled -> "Cancelled" to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                 }
-                Spacer(modifier = Modifier.width(16.dp))
                 
-                Column(modifier = Modifier.weight(1f)) {
-                    val (titleText, titleColor) = when (downloadState) {
-                        is DownloadState.Queued -> "Queued" to MaterialTheme.colorScheme.onSurface
-                        is DownloadState.Downloading -> "Downloading..." to MaterialTheme.colorScheme.primary
-                        is DownloadState.Success -> "Completed" to Color(0xFF00C853) // Green
-                        is DownloadState.Error -> "Failed" to Color.Red
-                        is DownloadState.Cancelled -> "Cancelled" to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    }
-                    
-                    Text(text = titleText, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = titleColor)
+                Text(text = titleText, fontWeight = FontWeight.Bold, fontSize = 14.sp, lineHeight = 18.sp, color = titleColor)
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(text = url, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                
+                if (isDownloading) {
+                    val state = downloadState as DownloadState.Downloading
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(text = url, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                    
-                    if (isDownloading) {
-                        val state = downloadState as DownloadState.Downloading
-                        Spacer(modifier = Modifier.height(8.dp))
-                        LinearProgressIndicator(
-                            progress = { state.progress },
-                            modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                            color = MaterialTheme.colorScheme.primary,
-                            trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(text = state.status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                    } else if (downloadState is DownloadState.Error) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(text = downloadState.message, fontSize = 12.sp, color = Color.Red.copy(alpha = 0.8f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                
-                if (isFinished) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(onClick = { viewModel.resetState(url) }) {
-                        Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = MaterialTheme.colorScheme.onSurface)
-                    }
+                    LinearProgressIndicator(
+                        progress = { state.progress },
+                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(text = state.status, fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                } else if (downloadState is DownloadState.Error) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(text = downloadState.message, fontSize = 12.sp, lineHeight = 16.sp, color = Color.Red.copy(alpha = 0.8f), maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
             
-            if (!isFinished) {
-                Row(
-                    horizontalArrangement = Arrangement.End,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
+            if (isFinished) {
+                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(onClick = { viewModel.resetState(url) }) {
+                    Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = MaterialTheme.colorScheme.onSurface)
+                }
+            } else {
+                Spacer(modifier = Modifier.width(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     if (isDownloading) {
-                        TextButton(onClick = { viewModel.pauseDownload(context.applicationContext, url) }) { Text("PAUSE", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface) }
+                        IconButton(onClick = { viewModel.pauseDownload(context.applicationContext, url) }) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_pause),
+                                contentDescription = "Pause",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
-                    TextButton(onClick = { viewModel.cancelDownload(context.applicationContext, url) }) { Text("CANCEL", fontWeight = FontWeight.Bold, color = Color.Red) }
+                    IconButton(onClick = { viewModel.cancelDownload(context.applicationContext, url) }) {
+                        Icon(Icons.Filled.Close, contentDescription = "Cancel", tint = Color.Red)
+                    }
                 }
             }
         }
@@ -529,7 +695,8 @@ fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: Dow
 fun DownloadedVideoCard(
     file: DownloadedFileDetails,
     viewModel: DownloaderViewModel,
-    context: android.content.Context
+    context: android.content.Context,
+    onDelete: (DownloadedFileDetails) -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -613,6 +780,19 @@ fun DownloadedVideoCard(
                         },
                         onClick = { viewModel.shareVideo(context, file); menuExpanded = false }
                     )
+                    DropdownMenuItem(
+                        text = { 
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete", modifier = Modifier.size(20.dp), tint = Color.Red)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Delete", color = Color.Red) 
+                            }
+                        },
+                        onClick = { 
+                            menuExpanded = false
+                            onDelete(file)
+                        }
+                    )
                 }
             }
         }
@@ -640,57 +820,51 @@ fun InitializingCard() {
 
 @Composable
 fun PausedVideoCard(paused: PausedDownload, onResume: () -> Unit, onCancel: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp).fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.PlayArrow,
-                        contentDescription = "Paused",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(16.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = "Paused (${paused.quality})", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(text = paused.url, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                    Spacer(modifier = Modifier.height(8.dp))
-                    LinearProgressIndicator(
-                        progress = { (paused.progress / 100f).coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(text = "${String.format("%.1f", paused.progress)}%", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                }
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Paused",
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.size(32.dp)
+                )
             }
-            Row(
-                horizontalArrangement = Arrangement.End,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
-            ) {
-                TextButton(onClick = onResume) {
-                    Text("RESUME", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = "Paused (${paused.quality})", fontWeight = FontWeight.Bold, fontSize = 14.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(text = paused.url, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                Spacer(modifier = Modifier.height(4.dp))
+                LinearProgressIndicator(
+                    progress = { (paused.progress / 100f).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(text = "${String.format("%.1f", paused.progress)}%", fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onResume) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = "Resume", tint = MaterialTheme.colorScheme.primary)
                 }
-                TextButton(onClick = onCancel) {
-                    Text("CANCEL", fontWeight = FontWeight.Bold, color = Color.Red)
+                IconButton(onClick = onCancel) {
+                    Icon(Icons.Filled.Close, contentDescription = "Cancel", tint = Color.Red)
                 }
             }
         }

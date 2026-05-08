@@ -9,6 +9,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -104,17 +105,44 @@ class DownloaderViewModel : ViewModel() {
                 _filesListState.value = FilesListState.Fetching
             }
             try {
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val targetDir = File(downloadsDir, baseDirName)
+                if (context == null) return@launch
+                val permissionManager = PermissionManager(context)
+                val customPath = permissionManager.getCustomDownloadFolderPath()
+                val targetDir = File(customPath)
                 
                 if (!targetDir.exists()) {
                     _filesListState.value = FilesListState.Success(emptyList())
                     return@launch
                 }
 
-                val files = targetDir.listFiles { file ->
-                    file.isFile && file.name.endsWith(".mp4", ignoreCase = true)
-                } ?: emptyArray()
+                // Leverage MediaStore for lightning-fast querying of the custom folder
+                val fileSet = mutableSetOf<String>()
+                val filesList = mutableListOf<File>()
+                
+                try {
+                    val projection = arrayOf(MediaStore.Video.Media.DATA)
+                    val selection = "${MediaStore.Video.Media.DATA} LIKE ?"
+                    val selectionArgs = arrayOf("$customPath/%_vdf.mp4")
+                    val sortOrder = "${MediaStore.Video.Media.DATE_MODIFIED} DESC"
+
+                    context.contentResolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
+                        val dataCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
+                        while (cursor.moveToNext()) {
+                            val path = cursor.getString(dataCol)
+                            val file = File(path)
+                            if (file.exists() && fileSet.add(path)) {
+                                filesList.add(file)
+                            }
+                        }
+                    }
+                } catch (e: Exception) { e.printStackTrace() }
+
+                // Fallback: Ensure we don't miss new files not yet scanned by MediaStore
+                targetDir.listFiles { file ->
+                    file.isFile && file.name.endsWith("_vdf.mp4", ignoreCase = true) && fileSet.add(file.absolutePath)
+                }?.let { filesList.addAll(it.sortedByDescending { f -> f.lastModified() }) }
+                
+                val files = filesList.toTypedArray()
 
                 val thumbCacheDir = File(context?.cacheDir, "thumbnails")
                 if (!thumbCacheDir.exists()) {
@@ -162,7 +190,7 @@ class DownloaderViewModel : ViewModel() {
                         var attempts = 0
                         while (!fileReadable && attempts < 10) {
                             try {
-                                FileInputStream(file).use { fis -> retriever.setDataSource(fis.fd) }
+                                retriever.setDataSource(file.absolutePath)
                                 fileReadable = true
                             } catch (e: Exception) {
                                 attempts++
@@ -201,6 +229,9 @@ class DownloaderViewModel : ViewModel() {
                     delay(50)
                 }
             } catch (e: Exception) {
+                // Ignore Coroutine cancellations so they don't trigger the Error UI
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                
                 e.printStackTrace()
                 _filesListState.value = FilesListState.Error("Failed to scan directory: ${e.message}")
             }
@@ -215,14 +246,19 @@ class DownloaderViewModel : ViewModel() {
         
         val nameWithoutExt = fileName.substring(0, lastIndex)
         
+        var cleanName = nameWithoutExt
+        if (cleanName.endsWith("_vdf", ignoreCase = true)) {
+            cleanName = cleanName.substring(0, cleanName.length - 4)
+        }
+
         val signatureRegex = """(.*)[\s_](\(\d+p?\))""".toRegex()
-        val matchResult = signatureRegex.find(nameWithoutExt)
+        val matchResult = signatureRegex.find(cleanName)
         
         return if (matchResult != null) {
             val (title, signature) = matchResult.destructured
             title.replace("_", " ") to signature
         } else {
-            nameWithoutExt.replace("_", " ") to "(MP4)"
+            cleanName.replace("_", " ") to "(MP4)"
         }
     }
 
@@ -300,5 +336,112 @@ class DownloaderViewModel : ViewModel() {
 
     fun resetState(url: String) {
         DownloadManager.removeDownload(url)
+    }
+
+    fun deleteVideo(
+        context: Context,
+        fileDetails: DownloadedFileDetails,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit,
+        onPermissionRequired: () -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val file = File(fileDetails.path)
+                
+                // 1. Physically delete the file directly (Works because your app created it)
+                var isDeleted = if (file.exists()) file.delete() else true
+
+                // 2. Fallback to SAF if normal delete failed (due to Scoped Storage + reinstall)
+                if (!isDeleted && file.exists()) {
+                    val permissionManager = PermissionManager(context)
+
+                    // Use either the dedicated delete permission URI or the general custom folder URI
+                    val possibleUris = listOfNotNull(
+                        permissionManager.getSavedFolderUri(),
+                        permissionManager.getCustomDownloadFolderUri()
+                    )
+
+                    for (treeUri in possibleUris) {
+                        try {
+                            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+                            var targetDocUri: Uri? = null
+
+                            // Find the specific file inside the granted folder tree
+                            context.contentResolver.query(childrenUri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
+                                val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                                val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                                while (cursor.moveToNext()) {
+                                    if (cursor.getString(nameCol) == file.name) {
+                                        targetDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(idCol))
+                                        break
+                                    }
+                                }
+                            }
+                            if (targetDocUri != null) {
+                                isDeleted = DocumentsContract.deleteDocument(context.contentResolver, targetDocUri!!)
+                                if (isDeleted) break
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+
+                    if (!isDeleted) {
+                        // We don't have permission yet, ask the UI to request it
+                        withContext(Dispatchers.Main) { onPermissionRequired() }
+                        return@launch
+                    }
+                }
+
+                if (isDeleted) {
+                    // 3. Silently clear the MediaStore index to prevent broken "ghosts" in the Gallery.
+                    // We catch and ignore SecurityExceptions here to guarantee NO system popups appear.
+                    try {
+                        var uri: Uri? = null
+                        val projection = arrayOf(MediaStore.Video.Media._ID)
+                        val selection = "${MediaStore.Video.Media.DATA} = ?"
+                        val selectionArgs = arrayOf(fileDetails.path)
+                        val queryUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+
+                        context.contentResolver.query(queryUri, projection, selection, selectionArgs, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+                                val id = cursor.getLong(idColumn)
+                                uri = ContentUris.withAppendedId(queryUri, id)
+                            }
+                        }
+                        uri?.let { context.contentResolver.delete(it, null, null) }
+                    } catch (e: Exception) {
+                        // Suppressed intentionally. The physical file is already gone.
+                    }
+
+                    // 3. Clean up the app UI instantly
+                    cleanupDeletedFile(context, fileDetails)
+                    withContext(Dispatchers.Main) { onSuccess() }
+                } else {
+                    withContext(Dispatchers.Main) { onError("Cannot delete file. Storage access denied.") }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                e.printStackTrace()
+                withContext(Dispatchers.Main) { onError(e.message ?: "Unknown error occurred.") }
+            }
+        }
+    }
+
+    private fun cleanupDeletedFile(context: Context, fileDetails: DownloadedFileDetails) {
+        val file = File(fileDetails.path)
+        if (file.exists()) file.delete()
+        
+        val thumbFile = File(context.cacheDir, "thumbnails/${file.name}.png")
+        if (thumbFile.exists()) thumbFile.delete()
+
+        // Instantly remove from UI State so the user sees it disappear immediately
+        val currentState = _filesListState.value
+        if (currentState is FilesListState.Success) {
+            val updatedList = currentState.files.filter { it.path != fileDetails.path }
+            _filesListState.value = FilesListState.Success(updatedList)
+        }
     }
 }
