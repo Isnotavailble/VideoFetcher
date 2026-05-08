@@ -120,7 +120,9 @@ fun VideoDownloaderUI(
     val notificationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) {
-        viewModel.fetchDownloadedFiles(context.applicationContext)
+        if (hasStoragePermission) {
+            viewModel.fetchDownloadedFiles(context.applicationContext)
+        }
     }
 
     val storageLauncher = rememberLauncherForActivityResult(
@@ -130,13 +132,12 @@ fun VideoDownloaderUI(
             ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
         }
         
-        if (hasStoragePermission) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && 
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                viewModel.fetchDownloadedFiles(context.applicationContext)
-            }
+        // Always ask for notifications next, even if storage was denied or jammed
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && 
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else if (hasStoragePermission) {
+            viewModel.fetchDownloadedFiles(context.applicationContext)
         }
     }
 
