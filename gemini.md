@@ -22,9 +22,10 @@ The app acts as a robust **Download Manager**, capable of downloading multiple v
 
 ### Service & Business Logic
 
-- **`DownloadService.kt`**: A foreground service executing downloads using `YoutubeDL` and `FFmpeg`. Manages a queue of parallel downloads (`maxParallelDownloads = 3`), maps active Coroutine `Job`s, and handles rich ongoing notifications per video.
-- **`DownloaderViewModel.kt`**: Bridges UI and background logic. Initializes engines and routes actions. Handles complex background file fetching with smart caching (preventing UI flashes/glitches) and lazy thumbnail generation via `MediaMetadataRetriever`.
+- **`DownloadService.kt`**: A foreground service executing downloads using `YoutubeDL` and `FFmpeg`. Manages a queue of parallel downloads, supports custom output paths, and safely injects the unique `_vdf` signature into filenames.
+- **`DownloaderViewModel.kt`**: Bridges UI and background logic. Initializes engines and routes actions. Handles blazing-fast background file fetching using **MediaStore querying** (filtering by the `_vdf` signature) and lazy thumbnail generation via `MediaMetadataRetriever`. Handles complex SAF deletion logic.
 - **`PauseRepository.kt`**: Uses `SharedPreferences` to persist paused download details (URL, title, quality, progress) into JSON objects for session recovery.
+- **`PermissionManager.kt`**: Manages persistent folder access (Storage Access Framework) via SharedPreferences. Allows the app to silently manage and delete downloaded files even after app reinstalls without triggering file-by-file system popups.
 
 ### State Management
 
@@ -48,3 +49,10 @@ The app acts as a robust **Download Manager**, capable of downloading multiple v
 - **Ignored Files Check:** As per project rules, files such as `local.properties`, `build/`, `.gradle`, `videofetcher.jks`, and `key.properties` are explicitly ignored and should not be tracked or committed.
 - **Adding Features:** New download entry points should follow the established pattern: resolve the target URL and quality, then start `DownloadService` by pushing intent extras (`URL`, `QUALITY`).
 - **UI State:** Rely on `DownloadManager.activeDownloads` and `DownloadManager.engineState` to react to state changes. State logic handles map updates implicitly based on URL keys.
+
+### Architecture & Style Rules
+
+- **Iconography:** Do **NOT** use the `material-icons-extended` library, as it drastically bloats the APK size. If an icon is missing from the core Material icons, create a custom lightweight XML vector drawable in `res/drawable/` (e.g., `ic_pause.xml`) and apply theme colors dynamically using Compose's `tint` parameter.
+- **Stateless File Management:** Avoid local databases (Room/SQLite) to track downloaded files, as they wipe on reinstall. Always append the custom `_vdf` signature (e.g., `video_name_(1080p)_vdf.mp4`) to filenames. This allows the app to recognize its own files instantly via MediaStore.
+- **Storage Permissions:** Use Storage Access Framework (SAF) `ACTION_OPEN_DOCUMENT_TREE` for custom folder selection and persistent file management. Never request `MANAGE_EXTERNAL_STORAGE` to guarantee strict Google Play compliance.
+- **UI/UX Typography & Layouts:** Maintain clean, breathable visual hierarchies. Use proper `lineHeight` ratios (e.g., `16.sp` line height for `12.sp` text). For list items (like download cards), prefer compact horizontal icon layouts over bulky vertical text buttons to conserve screen real estate.
