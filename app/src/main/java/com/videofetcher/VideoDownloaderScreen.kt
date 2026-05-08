@@ -8,6 +8,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.clickable
 import android.provider.DocumentsContract
 import androidx.compose.foundation.BorderStroke
@@ -80,13 +87,10 @@ fun VideoDownloaderUI(
         }
     }
 
-    // Determine which permissions to ask for based on Android version
-    val permissionsToRequest = remember {
+    // Determine which storage permissions to ask for based on Android version
+    val storagePermissions = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(
-                Manifest.permission.READ_MEDIA_VIDEO,
-                Manifest.permission.POST_NOTIFICATIONS
-            )
+            arrayOf(Manifest.permission.READ_MEDIA_VIDEO)
         } else {
             arrayOf(
                 Manifest.permission.READ_EXTERNAL_STORAGE,
@@ -95,24 +99,38 @@ fun VideoDownloaderUI(
         }
     }
 
-    // Permission Launcher to request access to existing files
-    val permissionLauncher = rememberLauncherForActivityResult(
+    val notificationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) {
+        viewModel.fetchDownloadedFiles(context.applicationContext)
+    }
+
+    val storageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        // Once the user answers the permission prompt, fetch the files
-        viewModel.fetchDownloadedFiles(context.applicationContext)
+        // Once storage is handled, check notifications on Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && 
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            viewModel.fetchDownloadedFiles(context.applicationContext)
+        }
     }
 
     LaunchedEffect(Unit) {
         viewModel.initializeEngine(context.applicationContext)
         
-        val missingPermissions = permissionsToRequest.filter {
+        val missingStorage = storagePermissions.filter {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray()
 
-        if (missingPermissions.isNotEmpty()) {
+        if (missingStorage.isNotEmpty()) {
             delay(300) // Ensure Activity is fully resumed before requesting
-            permissionLauncher.launch(missingPermissions)
+            storageLauncher.launch(missingStorage)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && 
+                   ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            delay(300)
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             viewModel.fetchDownloadedFiles(context.applicationContext)
         }
@@ -207,31 +225,26 @@ fun HomeContent(
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         Text(
-            text = "VIDEO\nFETCHER",
+            text = "VIDEO FETCHER",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.ExtraBold,
-            lineHeight = 32.sp,
-            color = MaterialTheme.colorScheme.onSurface
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(bottom = 48.dp)
         )
         
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text("Video URL", fontWeight = FontWeight.Bold, color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        val inputContainerColor = if (isReady) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+        val inputContainerColor = if (isReady) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)
         
         OutlinedTextField(
             value = url,
             onValueChange = onUrlChange,
-            placeholder = { Text("https://...") },
+            placeholder = { Text("Paste video link here...", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)) },
             trailingIcon = {
                 if (url.isEmpty()) {
                     IconButton(onClick = {
                         val clipText = clipboardManager.getText()?.text
                         if (!clipText.isNullOrBlank()) onUrlChange(clipText)
                     }) {
-                        Icon(painterResource(id = R.drawable.ic_content_paste), contentDescription = "Paste URL", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                        Icon(painterResource(id = R.drawable.ic_content_paste), contentDescription = "Paste URL", tint = MaterialTheme.colorScheme.primary)
                     }
                 } else {
                     IconButton(onClick = { onUrlChange("") }) {
@@ -239,45 +252,75 @@ fun HomeContent(
                     }
                 }
             },
-            textStyle = LocalTextStyle.current,
-            modifier = Modifier.fillMaxWidth().background(inputContainerColor, RoundedCornerShape(8.dp)),
+            textStyle = LocalTextStyle.current.copy(fontSize = 14.sp),
+            modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             enabled = isReady,
             colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent, disabledContainerColor = Color.Transparent,
-                focusedTextColor = MaterialTheme.colorScheme.onSurface, unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                cursorColor = MaterialTheme.colorScheme.primary,
-                focusedBorderColor = Color.Transparent, unfocusedBorderColor = Color.Transparent, disabledBorderColor = Color.Transparent
+                focusedContainerColor = inputContainerColor, 
+                unfocusedContainerColor = inputContainerColor, 
+                disabledContainerColor = inputContainerColor,
+                focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), 
+                unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f), 
+                disabledBorderColor = Color.Transparent
             ),
-            shape = RoundedCornerShape(8.dp)
+            shape = RoundedCornerShape(12.dp)
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text("Format Selection", fontWeight = FontWeight.Bold, color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
         Spacer(modifier = Modifier.height(8.dp))
+
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("1080p", "720p", "480p").forEach { format ->
                 val isSelected = selectedFormat == format
                 Surface(
                     onClick = { onFormatChange(format) },
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (isSelected && isReady) MaterialTheme.colorScheme.primary else if (!isReady) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, if (!isReady) Color.Transparent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (isSelected && isReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
                     modifier = Modifier.weight(1f),
                     enabled = isReady
                 ) {
                     Text(
                         text = format,
-                        color = if (isSelected && isReady) MaterialTheme.colorScheme.onPrimary else if (!isReady) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurface,
-                        textAlign = TextAlign.Center, modifier = Modifier.padding(vertical = 12.dp)
+                        color = if (isSelected && isReady) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center, 
+                        modifier = Modifier.padding(vertical = 8.dp)
                     )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Button(
+            onClick = { 
+                viewModel.startDownload(url, selectedFormat, context.applicationContext)
+                onUrlChange("") 
+            },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary, 
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                disabledContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+            ),
+            shape = RoundedCornerShape(12.dp), 
+            enabled = url.isNotBlank() && isReady
+        ) {
+            Icon(painter = painterResource(id = R.drawable.ic_download), contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Download", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        }
+
+        Spacer(modifier = Modifier.height(48.dp))
+
+        Text(
+            text = "Active Queue",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(modifier = Modifier.height(8.dp))
 
         LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(bottom = 16.dp)) {
             if (engineState is EngineState.Initializing) {
@@ -287,6 +330,20 @@ fun HomeContent(
                 item { ErrorCard(err.message); Spacer(modifier = Modifier.height(16.dp)) }
             }
 
+            if (isReady && activeDownloads.isEmpty() && engineState !is EngineState.Initializing && engineState !is EngineState.Error) {
+                item {
+                    Text(
+                        text = "No downloads yet.",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 32.dp)
+                    )
+                }
+            }
+
             items(activeDownloads.entries.toList()) { (downloadUrl, downloadState) ->
                 ActiveDownloadCard(
                     downloadState = downloadState,
@@ -294,30 +351,9 @@ fun HomeContent(
                     viewModel = viewModel,
                     context = context
                 )
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
             }
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = { 
-                viewModel.startDownload(url, selectedFormat, context.applicationContext)
-                onUrlChange("") // Clean input on success to be ready for next URL
-            },
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary,
-                disabledContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f), disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-            ),
-            shape = RoundedCornerShape(8.dp), enabled = url.isNotBlank() && isReady
-        ) {
-            Icon(painter = painterResource(id = R.drawable.ic_download), contentDescription = null, modifier = Modifier.size(24.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("DOWNLOAD VIDEO", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-        }
-        
-        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
@@ -610,13 +646,13 @@ fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: Dow
     val isFinished = downloadState is DownloadState.Success || downloadState is DownloadState.Error || downloadState is DownloadState.Cancelled
     val isDownloading = downloadState is DownloadState.Downloading
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp)
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
@@ -800,19 +836,35 @@ fun DownloadedVideoCard(
 
 @Composable
 fun InitializingCard() {
-    Card(
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "alpha"
+    )
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
         modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Row(
+            modifier = Modifier.padding(16.dp).alpha(alpha),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
         ) {
-            CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.primary)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("Extracting libraries...", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            Icon(
+                painter = painterResource(id = R.drawable.ic_package),
+                contentDescription = "Extracting",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text("Preparing engine...", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }

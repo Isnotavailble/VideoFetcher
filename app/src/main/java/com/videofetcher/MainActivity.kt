@@ -16,7 +16,14 @@ import com.videofetcher.settings.SettingsManager
 import com.videofetcher.theme.VideoFetcherTheme
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
+import android.app.Activity
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 
 class MainActivity : ComponentActivity() {
     // Hold the shared URL in a state variable so Compose can react to it instantly
@@ -31,20 +38,38 @@ class MainActivity : ComponentActivity() {
         // Handle intent if app is opened fresh
         handleIntent(intent)
 
+        // Fetch the initial theme synchronously to prevent the 1-frame light mode flash
+        val initialDarkTheme = runBlocking { settingsManager.isDark.first() }
+
+        // INSTANTLY paint the native window background before Compose draws the next frame.
+        // This completely hides the 1-frame buffer drop caused by the MIUI shield.
+        val windowBackgroundColor = if (initialDarkTheme) {
+            android.graphics.Color.parseColor("#000000") // Match Dark background
+        } else {
+            android.graphics.Color.parseColor("#FEFEFE") // Match Light background
+        }
+        window.decorView.setBackgroundColor(windowBackgroundColor)
+
         setContent {
-            val isDarkTheme by settingsManager.isDark.collectAsState(initial = false)
+            val isDarkTheme by settingsManager.isDark.collectAsState(initial = initialDarkTheme)
             val scope = rememberCoroutineScope()
 
-            // INSTANTLY paint the native window background before Compose draws the next frame.
-            // This completely hides the 1-frame buffer drop caused by the MIUI shield.
-            val windowBackgroundColor = if (isDarkTheme) {
-                android.graphics.Color.parseColor("#000000") // Match Dark background
-            } else {
-                android.graphics.Color.parseColor("#FEFEFE") // Match Light background
-            }
-            window.decorView.setBackgroundColor(windowBackgroundColor)
-
             VideoFetcherTheme(darkTheme = isDarkTheme) {
+                val view = LocalView.current
+                val backgroundColor = MaterialTheme.colorScheme.background.toArgb()
+                
+                if (!view.isInEditMode) {
+                    SideEffect {
+                        val window = (view.context as Activity).window
+                        window.statusBarColor = backgroundColor
+                        window.navigationBarColor = backgroundColor
+                        WindowCompat.getInsetsController(window, view).apply {
+                            isAppearanceLightStatusBars = !isDarkTheme
+                            isAppearanceLightNavigationBars = !isDarkTheme
+                        }
+                    }
+                }
+
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

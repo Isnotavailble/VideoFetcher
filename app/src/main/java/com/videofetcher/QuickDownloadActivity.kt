@@ -31,6 +31,8 @@ import androidx.core.content.ContextCompat
 import com.videofetcher.settings.SettingsManager
 import com.videofetcher.theme.VideoFetcherTheme
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 
 @OptIn(ExperimentalMaterial3Api::class)
 class QuickDownloadActivity : ComponentActivity() {
@@ -56,9 +58,11 @@ class QuickDownloadActivity : ComponentActivity() {
             return
         }
 
+        // Fetch the theme synchronously so the bottom sheet never flashes the wrong color
+        val initialDarkTheme = runBlocking { settingsManager.isDark.first() }
+
         setContent {
-            val isSystemDark = isSystemInDarkTheme()
-            val isDarkTheme by settingsManager.isDark.collectAsState(initial = isSystemDark)
+            val isDarkTheme by settingsManager.isDark.collectAsState(initial = initialDarkTheme)
 
             VideoFetcherTheme(darkTheme = isDarkTheme) {
                 val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -71,8 +75,13 @@ class QuickDownloadActivity : ComponentActivity() {
                 val permissionLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestMultiplePermissions()
                 ) { permissions ->
-                    val allGranted = permissions.entries.all { it.value }
-                    if (allGranted) {
+                    val storageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+                    } else {
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+                    }
+
+                    if (storageGranted) {
                         Toast.makeText(context, "VideoFetcher: Downloading...", Toast.LENGTH_SHORT).show()
                         scope.launch {
                             val serviceIntent = Intent(context, DownloadService::class.java).apply {
