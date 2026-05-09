@@ -28,6 +28,18 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 
+sealed class VideoInfoState {
+    object Idle : VideoInfoState()
+    object Fetching : VideoInfoState()
+    data class Success(
+        val title: String,
+        val duration: String,
+        val thumbnailUrl: String,
+        val formats: List<String>
+    ) : VideoInfoState()
+    data class Error(val message: String) : VideoInfoState()
+}
+
 class DownloaderViewModel : ViewModel() {
     val engineState: StateFlow<EngineState> = DownloadManager.engineState
     val activeDownloads: StateFlow<Map<String, DownloadState>> = DownloadManager.activeDownloads
@@ -38,8 +50,12 @@ class DownloaderViewModel : ViewModel() {
     private val _pausedDownloads = MutableStateFlow<List<PausedDownload>>(emptyList())
     val pausedDownloads: StateFlow<List<PausedDownload>> = _pausedDownloads.asStateFlow()
 
+    private val _videoInfoState = MutableStateFlow<VideoInfoState>(VideoInfoState.Idle)
+    val videoInfoState: StateFlow<VideoInfoState> = _videoInfoState.asStateFlow()
+
     private val baseDirName = "VideoFetcher"
     private var fetchJob: Job? = null
+    private var analyzeJob: Job? = null
 
     fun initializeEngine(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -54,6 +70,72 @@ class DownloaderViewModel : ViewModel() {
                 DownloadManager.updateEngineState(EngineState.Error("Engine failed to boot: ${e.message}"))
             }
         }
+    }
+
+    fun analyzeUrl(url: String) {
+        analyzeJob?.cancel()
+        if (url.isBlank()) {
+            _videoInfoState.value = VideoInfoState.Idle
+            return
+        }
+
+        // Basic URL format validation before hitting the engine
+        val urlRegex = """^(https?|ftp)://[^\s/$.?#].[^\s]*$""".toRegex(RegexOption.IGNORE_CASE)
+        if (!urlRegex.matches(url)) {
+            _videoInfoState.value = VideoInfoState.Error("Invalid URL format")
+            return
+        }
+
+        analyzeJob = viewModelScope.launch(Dispatchers.IO) {
+            _videoInfoState.value = VideoInfoState.Fetching
+            try {
+                val request = YoutubeDLRequest(url)
+                
+                // 1. Aggressive Pruning (Ignore comments, subtitles, and playlists)
+                request.addOption("--no-playlist")
+                request.addOption("--no-write-subs")
+                request.addOption("--compat-options", "no-youtube-unavailable-videos")
+                
+                // 2. Force IPv4 to prevent silent 10-second timeout hangs
+                request.addOption("--force-ipv4")
+                
+                val info = YoutubeDL.getInstance().getInfo(request)
+                
+                // Resolution Bucketing (handles vertical videos securely)
+                val rawMaxHeight = info.formats
+                    ?.filter { it.height > 0 && it.vcodec != "none" }
+                    ?.maxOfOrNull { Math.min(it.width.coerceAtLeast(0), it.height) } ?: 0
+
+                val formats = mutableListOf<String>()
+                when {
+                    rawMaxHeight >= 2160 -> formats.addAll(listOf("4K", "2K", "1080p", "720p", "480p"))
+                    rawMaxHeight >= 1440 -> formats.addAll(listOf("2K", "1080p", "720p", "480p"))
+                    rawMaxHeight >= 1000 -> formats.addAll(listOf("1080p", "720p", "480p", "360p"))
+                    rawMaxHeight >= 720 -> formats.addAll(listOf("720p", "480p", "360p"))
+                    rawMaxHeight >= 480 -> formats.addAll(listOf("480p", "360p"))
+                    rawMaxHeight > 0 -> formats.add("360p")
+                    else -> formats.add("Best Quality")
+                }
+                val durationStr = formatDuration((info.duration * 1000).toLong())
+                
+                withContext(Dispatchers.Main) {
+                    _videoInfoState.value = VideoInfoState.Success(
+                        title = info.title ?: "Unknown Title",
+                        duration = durationStr,
+                        thumbnailUrl = info.thumbnail ?: "",
+                        formats = formats
+                    )
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                withContext(Dispatchers.Main) { _videoInfoState.value = VideoInfoState.Error("Couldn't fetch video info. Is the link correct?") }
+            }
+        }
+    }
+
+    fun clearVideoInfo() {
+        analyzeJob?.cancel()
+        _videoInfoState.value = VideoInfoState.Idle
     }
 
     fun startDownload(url: String, quality: String, context: Context) {

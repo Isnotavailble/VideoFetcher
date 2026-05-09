@@ -20,6 +20,14 @@ class PermissionManager(private val context: Context) {
     private val customUriKey = "custom_folder_uri"
     private val customPathKey = "custom_folder_path"
 
+    fun isResolutionSelectionEnabled(): Boolean {
+        return prefs.getBoolean("resolution_selection_enabled", false) // Default is Instant "Best Quality" Mode
+    }
+
+    fun setResolutionSelectionEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean("resolution_selection_enabled", enabled) }
+    }
+
     /**
      * Takes a URI granted from ACTION_OPEN_DOCUMENT_TREE, makes the permission persistent,
      * and saves its string representation to SharedPreferences.

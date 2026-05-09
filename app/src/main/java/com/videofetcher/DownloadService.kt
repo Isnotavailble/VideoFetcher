@@ -99,10 +99,25 @@ class DownloadService : Service() {
                 if (!targetDir.exists()) targetDir.mkdirs()
 
                 val request = YoutubeDLRequest(url)
-                val resolution = quality.replace("p", "")
-                val resolutionSignature = "(${resolution}p)"
+                
+                val targetHeight = when (quality) {
+                    "4K" -> "2160"
+                    "2K" -> "1440"
+                    "Best Quality" -> "best"
+                    else -> quality.replace("p", "")
+                }
+                
+                val resolutionSignature = if (quality == "Best Quality") "(Best)" else "(${quality})"
 
-                request.addOption("-f", "bestvideo[height<=$resolution]+bestaudio/best")
+                if (quality == "Best Quality") {
+                    request.addOption("-f", "bestvideo+bestaudio/best")
+                } else {
+                    // Force H.264/AVC compatible codecs for Android gallery support, fallback to any if missing
+                    request.addOption("-f", "bestvideo[height<=$targetHeight][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=$targetHeight]+bestaudio/best")
+                }
+                
+                // Embed thumbnail directly into the MP4 file
+                request.addOption("--embed-thumbnail")
                 request.addOption("--merge-output-format", "mp4")
                 request.addOption("--restrict-filenames")
                 request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}_vdf.%(ext)s")

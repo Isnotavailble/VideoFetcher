@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -26,12 +27,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshContainer
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -72,10 +75,14 @@ fun VideoDownloaderUI(
     var selectedFormat by remember { mutableStateOf("1080p") }
     val engineState by viewModel.engineState.collectAsState()
     val activeDownloads by viewModel.activeDownloads.collectAsState()
+    val videoInfoState by viewModel.videoInfoState.collectAsState()
     val filesListState by viewModel.filesListState.collectAsState()
     val pausedDownloads by viewModel.pausedDownloads.collectAsState()
 
     var currentTab by remember { mutableStateOf(AppTab.HOME) }
+    
+    val permissionManager = remember { PermissionManager(context) }
+    var isResolutionSelectionEnabled by remember { mutableStateOf(permissionManager.isResolutionSelectionEnabled()) }
 
     // Only refresh when the number of items or successes changes, avoiding progress-tick loops
     val successCount = activeDownloads.values.count { it is DownloadState.Success }
@@ -88,8 +95,9 @@ fun VideoDownloaderUI(
 
     // Update URL field automatically when intent brings a new link
     LaunchedEffect(sharedUrl) {
-        if (sharedUrl.isNotEmpty()) {
+        if (sharedUrl.isNotEmpty() && sharedUrl != url) {
             url = sharedUrl
+            viewModel.clearVideoInfo()
         }
     }
 
@@ -233,10 +241,17 @@ fun VideoDownloaderUI(
             when (currentTab) {
                 AppTab.HOME -> HomeContent(
                     url = url,
-                    onUrlChange = { url = it },
+                    onUrlChange = { newUrl -> 
+                        if (url != newUrl) {
+                            url = newUrl
+                            viewModel.clearVideoInfo()
+                        }
+                    },
+                    isResolutionSelectionEnabled = isResolutionSelectionEnabled,
                     selectedFormat = selectedFormat,
                     onFormatChange = { selectedFormat = it },
                     engineState = engineState,
+                    videoInfoState = videoInfoState,
                     activeDownloads = activeDownloads,
                     isReady = isReady,
                     viewModel = viewModel,
@@ -249,6 +264,11 @@ fun VideoDownloaderUI(
                 AppTab.SETTINGS -> SettingsContent(
                     isDarkTheme = isDarkTheme, 
                     onThemeToggle = onThemeToggle, 
+                    isResolutionSelectionEnabled = isResolutionSelectionEnabled,
+                    onResolutionSelectionChange = { 
+                        permissionManager.setResolutionSelectionEnabled(it)
+                        isResolutionSelectionEnabled = it
+                    },
                     viewModel = viewModel, 
                     context = context,
                     onAboutClick = { showAboutScreen = true }
@@ -264,9 +284,11 @@ fun VideoDownloaderUI(
 fun HomeContent(
     url: String,
     onUrlChange: (String) -> Unit,
+    isResolutionSelectionEnabled: Boolean,
     selectedFormat: String,
     onFormatChange: (String) -> Unit,
     engineState: EngineState,
+    videoInfoState: VideoInfoState,
     activeDownloads: Map<String, DownloadState>,
     isReady: Boolean,
     viewModel: DownloaderViewModel,
@@ -275,6 +297,26 @@ fun HomeContent(
     hasStoragePermission: Boolean,
     onRequestPermission: () -> Unit
 ) {
+    // Auto-select the best format when fetched successfully
+    LaunchedEffect(videoInfoState) {
+        if (videoInfoState is VideoInfoState.Success && selectedFormat !in videoInfoState.formats) {
+            onFormatChange(videoInfoState.formats.firstOrNull() ?: "Best Quality")
+        }
+    }
+
+    val fetchingTexts = listOf("Analyzing link...", "Getting resolution options...", "Finalizing options...")
+    var fetchingTextIndex by remember { mutableStateOf(0) }
+
+    LaunchedEffect(videoInfoState) {
+        if (videoInfoState is VideoInfoState.Fetching) {
+            fetchingTextIndex = 0
+            while (true) {
+                delay(2500)
+                if (fetchingTextIndex < fetchingTexts.size - 1) fetchingTextIndex++
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Text(
             text = "VIDEO FETCHER",
@@ -292,15 +334,21 @@ fun HomeContent(
             placeholder = { Text("Paste video link here...", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)) },
             trailingIcon = {
                 if (url.isEmpty()) {
-                    IconButton(onClick = {
-                        val clipText = clipboardManager.getText()?.text
-                        if (!clipText.isNullOrBlank()) onUrlChange(clipText)
-                    }) {
-                        Icon(painterResource(id = R.drawable.ic_content_paste), contentDescription = "Paste URL", tint = MaterialTheme.colorScheme.primary)
+                    IconButton(
+                        onClick = {
+                            val clipText = clipboardManager.getText()?.text
+                            if (!clipText.isNullOrBlank()) onUrlChange(clipText)
+                        },
+                        enabled = isReady
+                    ) {
+                        Icon(painterResource(id = R.drawable.ic_content_paste), contentDescription = "Paste URL", tint = if (isReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f))
                     }
                 } else {
-                    IconButton(onClick = { onUrlChange("") }) {
-                        Icon(Icons.Filled.Clear, contentDescription = "Clear URL", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                    IconButton(
+                        onClick = { onUrlChange("") },
+                        enabled = isReady
+                    ) {
+                        Icon(Icons.Filled.Clear, contentDescription = "Clear URL", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = if (isReady) 0.5f else 0.3f))
                     }
                 }
             },
@@ -314,45 +362,102 @@ fun HomeContent(
                 disabledContainerColor = inputContainerColor,
                 focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), 
                 unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f), 
-                disabledBorderColor = Color.Transparent
+                disabledBorderColor = Color.Transparent,
+                disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
             ),
             shape = RoundedCornerShape(12.dp)
         )
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("1080p", "720p", "480p").forEach { format ->
-                val isSelected = selectedFormat == format
-                Surface(
-                    onClick = { onFormatChange(format) },
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (isSelected && isReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
-                    modifier = Modifier.weight(1f),
-                    enabled = isReady
-                ) {
-                    Text(
-                        text = format,
-                        color = if (isSelected && isReady) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center, 
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
+        AnimatedVisibility(visible = isResolutionSelectionEnabled && (videoInfoState is VideoInfoState.Success || videoInfoState is VideoInfoState.Error)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                when (val state = videoInfoState) {
+                    is VideoInfoState.Error -> {
+                        Text(text = state.message, color = Color.Red, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                    }
+                    is VideoInfoState.Success -> {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    SubcomposeAsyncImage(
+                                        model = ImageRequest.Builder(LocalContext.current)
+                                            .data(state.thumbnailUrl)
+                                            .crossfade(true)
+                                            .build(),
+                                        contentDescription = "Video Thumbnail",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)),
+                                        loading = { Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))) },
+                                        error = { Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))) }
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(text = state.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface)
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(text = state.duration, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(16.dp))
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    items(state.formats) { format ->
+                                        val isSelected = selectedFormat == format
+                                        Surface(
+                                            onClick = { onFormatChange(format) },
+                                            shape = RoundedCornerShape(16.dp),
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                                            modifier = Modifier.defaultMinSize(minWidth = 64.dp)
+                                        ) {
+                                            Text(
+                                                text = format,
+                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                fontSize = 12.sp,
+                                                textAlign = TextAlign.Center,
+                                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else -> {}
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        val isFetching = videoInfoState is VideoInfoState.Fetching
+        val needsAnalysis = isResolutionSelectionEnabled && (videoInfoState is VideoInfoState.Idle || videoInfoState is VideoInfoState.Error)
+
+        val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+        val pulseAlpha by infiniteTransition.animateFloat(
+            initialValue = 0.5f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "alpha"
+        )
 
         Button(
-            onClick = { 
-                if (hasStoragePermission) {
-                    viewModel.startDownload(url, selectedFormat, context.applicationContext)
-                    onUrlChange("") 
+            onClick = {
+                if (isResolutionSelectionEnabled && needsAnalysis) {
+                    viewModel.analyzeUrl(url)
                 } else {
-                    onRequestPermission()
-                    Toast.makeText(context, "Storage permission required to download", Toast.LENGTH_SHORT).show()
+                    if (hasStoragePermission) {
+                        val qualityToDownload = if (isResolutionSelectionEnabled) selectedFormat else "Best Quality"
+                        viewModel.startDownload(url, qualityToDownload, context.applicationContext)
+                        onUrlChange("") 
+                    } else {
+                        onRequestPermission()
+                        Toast.makeText(context, "Storage permission required to download", Toast.LENGTH_SHORT).show()
+                    }
                 }
             },
             modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -362,11 +467,21 @@ fun HomeContent(
                 disabledContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
             ),
             shape = RoundedCornerShape(12.dp), 
-            enabled = url.isNotBlank() && isReady
+            enabled = url.isNotBlank() && isReady && (!isResolutionSelectionEnabled || !isFetching)
         ) {
-            Icon(painter = painterResource(id = R.drawable.ic_download), contentDescription = null, modifier = Modifier.size(20.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Download", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            if (isResolutionSelectionEnabled && isFetching) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(fetchingTexts[fetchingTextIndex], fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.alpha(pulseAlpha))
+            } else if (isResolutionSelectionEnabled && needsAnalysis) {
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Next", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            } else {
+                Icon(painterResource(id = R.drawable.ic_download), contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Download", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
         }
 
         Spacer(modifier = Modifier.height(48.dp))
@@ -383,8 +498,7 @@ fun HomeContent(
             if (engineState is EngineState.Initializing) {
                 item { InitializingCard(); Spacer(modifier = Modifier.height(16.dp)) }
             } else if (engineState is EngineState.Error) {
-                val err = engineState as EngineState.Error
-                item { ErrorCard(err.message); Spacer(modifier = Modifier.height(16.dp)) }
+                item { ErrorCard(engineState.message); Spacer(modifier = Modifier.height(16.dp)) }
             }
 
             if (isReady && activeDownloads.isEmpty() && engineState !is EngineState.Initializing && engineState !is EngineState.Error) {
@@ -610,6 +724,8 @@ fun FilesContent(
 fun SettingsContent(
     isDarkTheme: Boolean, 
     onThemeToggle: () -> Unit,
+    isResolutionSelectionEnabled: Boolean,
+    onResolutionSelectionChange: (Boolean) -> Unit,
     viewModel: DownloaderViewModel,
     context: android.content.Context,
     onAboutClick: () -> Unit
@@ -662,6 +778,33 @@ fun SettingsContent(
             )
         }
 
+        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
+
+        Text("Downloads", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp)
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                Text("Select Resolution", color = MaterialTheme.colorScheme.onSurface)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Fetch metadata to choose video quality. Turn off for instant 'Best Quality' downloads.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
+            }
+            Switch(
+                checked = isResolutionSelectionEnabled,
+                onCheckedChange = { onResolutionSelectionChange(it) },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary,
+                    checkedBorderColor = Color.Transparent,
+                    uncheckedThumbColor = MaterialTheme.colorScheme.surface,
+                    uncheckedTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                    uncheckedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                )
+            )
+        }
+        
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
         
         Text("Storage & Cache", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp)
@@ -739,7 +882,7 @@ fun SettingsContent(
                 Spacer(modifier = Modifier.height(2.dp))
                 Text("Privacy, Community, and Contact", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp)
             }
-            Icon(Icons.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
         }
         
         Spacer(modifier = Modifier.height(24.dp))
@@ -844,7 +987,7 @@ fun AboutScreen(onBack: () -> Unit) {
                 title = { Text("About", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

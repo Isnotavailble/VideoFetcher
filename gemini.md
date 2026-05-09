@@ -5,7 +5,7 @@
 VideoFetcher is an Android application designed to download videos via URL. It operates via two main features:
 
 1. **In-App Download:** A full Jetpack Compose UI for pasting URLs, tracking downloads, and viewing completed files.
-2. **Quick Share:** A transparent activity (bottom sheet) triggered via the Android Share sheet (`Intent.ACTION_SEND`), allowing users to download videos directly from other apps without opening the full UI.
+2. **Quick Share:** A transparent activity (bottom sheet) triggered via the Android Share sheet (`Intent.ACTION_SEND`), allowing users to fetch metadata, choose qualities, and download videos directly from other apps without opening the full UI.
 
 The app acts as a robust **Download Manager**, capable of downloading multiple videos in parallel using a queueing system managed by a unified `DownloadService`.
 
@@ -16,22 +16,23 @@ The app acts as a robust **Download Manager**, capable of downloading multiple v
 - **`MainActivity.kt`**: Main entry point. Hosts the Jetpack Compose UI (`VideoDownloaderUI`). Extracts URLs from intents on launch and instantly renders native window backgrounds to prevent UI flashing.
 - **`QuickDownloadActivity.kt`**: A lightweight, transparent Compose activity handling shared URLs. Parses URLs via Regex, displays a Modal Bottom Sheet, checks permissions, and starts the `DownloadService`.
 - **`VideoDownloaderScreen.kt`**: The primary Compose UI utilizing a Material 3 3-tab layout (`NavigationBar`):
-    - **Home**: URL input (with clipboard auto-paste), format selection, and a scrollable queue of active downloads (`ActiveDownloadCard`).
+    - **Home**: URL input (with clipboard auto-paste), a **Progressive Disclosure UI** (X-Ray metadata fetching with a dynamic "Media Card" reveal), resolution selection, and a scrollable queue of active downloads (`ActiveDownloadCard`).
     - **Files**: Displays paused and completed video cards with a Pull-to-Refresh container.
-    - **Settings**: Manages App Appearance (Dark/Light mode) and other preferences.
+    - **Settings**: Manages App Appearance, global UI toggles (like "Select Resolution" Lightning vs. X-Ray mode), custom SAF download directories, and hosts the dedicated community-focused **About** screen.
 
 ### Service & Business Logic
 
-- **`DownloadService.kt`**: A foreground service executing downloads using `YoutubeDL` and `FFmpeg`. Manages a queue of parallel downloads, supports custom output paths, and safely injects the unique `_vdf` signature into filenames.
-- **`DownloaderViewModel.kt`**: Bridges UI and background logic. Initializes engines and routes actions. Handles blazing-fast background file fetching using **MediaStore querying** (filtering by the `_vdf` signature) and lazy thumbnail generation via `MediaMetadataRetriever`. Handles complex SAF deletion logic.
+ - **`DownloadService.kt`**: A foreground service executing downloads using `YoutubeDL` and `FFmpeg`. Manages parallel queues, supports custom SAF paths, and safely injects the `_vdf` signature. It strictly enforces Android-compatible **H.264/AVC codecs** and directly embeds thumbnails into the MP4 container for seamless Gallery support.
+ - **`DownloaderViewModel.kt`**: Bridges UI and background logic. Handles local file MediaStore querying, lazy thumbnail generation, and SAF deletion. Additionally, it manages high-speed "X-Ray" metadata fetching (optimized with `--force-ipv4` and `--no-playlist`) and **Resolution Bucketing** (mapping raw server heights to familiar UI tiers like 4K, 2K, 1080p).
 - **`PauseRepository.kt`**: Uses `SharedPreferences` to persist paused download details (URL, title, quality, progress) into JSON objects for session recovery.
-- **`PermissionManager.kt`**: Manages persistent folder access (Storage Access Framework) via SharedPreferences. Allows the app to silently manage and delete downloaded files even after app reinstalls without triggering file-by-file system popups.
+ - **`PermissionManager.kt`**: Manages persistent folder access (SAF) via SharedPreferences to silently manage files across reinstalls. Also acts as the central local datastore for global user preferences (e.g., `resolution_selection_enabled`).
 
 ### State Management
 
 - **`DownloadManager.kt`**: A centralized singleton holding the app's global state flows.
 - **`DownloaderState.kt`**: Split into `EngineState` (`Initializing`, `Idle`, `Error`) and `DownloadState` per URL (`Queued`, `Downloading`, `Success`, `Error`, `Cancelled`). The UI observes a `Map<String, DownloadState>`.
 - **`FilesListState.kt`**: Sealed class managing the downloaded files list lifecycle (`Fetching`, `Success`, `Error`, `Idle`). Includes the `DownloadedFileDetails` data class.
+ - **`VideoInfoState`**: Sealed class inside the ViewModel tracking the X-Ray metadata fetching lifecycle (`Idle`, `Fetching`, `Success`, `Error`) to drive the progressive UI animations.
 
 ### Build & CI/CD
 
