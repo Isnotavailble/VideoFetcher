@@ -28,6 +28,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshContainer
@@ -171,6 +174,11 @@ fun VideoDownloaderUI(
 
     val isReady = engineState is EngineState.Idle
 
+    var showAboutScreen by remember { mutableStateOf(false) }
+
+    if (showAboutScreen) {
+        AboutScreen(onBack = { showAboutScreen = false })
+    } else {
     Scaffold(
         bottomBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
@@ -238,9 +246,16 @@ fun VideoDownloaderUI(
                     onRequestPermission = requestStoragePermission
                 )
                 AppTab.FILES -> FilesContent(pausedDownloads, filesListState, viewModel, context, hasStoragePermission, requestStoragePermission)
-                AppTab.SETTINGS -> SettingsContent(isDarkTheme, onThemeToggle, viewModel, context)
+                AppTab.SETTINGS -> SettingsContent(
+                    isDarkTheme = isDarkTheme, 
+                    onThemeToggle = onThemeToggle, 
+                    viewModel = viewModel, 
+                    context = context,
+                    onAboutClick = { showAboutScreen = true }
+                )
             }
         }
+    }
     }
 }
 
@@ -596,8 +611,10 @@ fun SettingsContent(
     isDarkTheme: Boolean, 
     onThemeToggle: () -> Unit,
     viewModel: DownloaderViewModel,
-    context: android.content.Context
+    context: android.content.Context,
+    onAboutClick: () -> Unit
 ) {
+    val scrollState = rememberScrollState()
     val permissionManager = remember { PermissionManager(context) }
     var currentPath by remember { mutableStateOf(permissionManager.getCustomDownloadFolderPath()) }
     
@@ -616,7 +633,7 @@ fun SettingsContent(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState)) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -707,9 +724,25 @@ fun SettingsContent(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
 
-        Spacer(modifier = Modifier.weight(1f))
-        Text("VideoFetcher v1.0.0", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.align(Alignment.CenterHorizontally), fontSize = 12.sp)
-        Spacer(modifier = Modifier.height(16.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { onAboutClick() }
+                .padding(vertical = 12.dp, horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Filled.Info, contentDescription = "About", tint = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("About this app", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(2.dp))
+                Text("Privacy, Community, and Contact", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp)
+            }
+            Icon(Icons.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+        }
+        
+        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
@@ -795,6 +828,126 @@ fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: Dow
                     }
                 }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AboutScreen(onBack: () -> Unit) {
+    val uriHandler = LocalUriHandler.current
+    val scrollState = rememberScrollState()
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("About", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(horizontal = 24.dp)
+                .verticalScroll(scrollState)
+        ) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "VideoFetcher",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                "VideoFetcher was built by a small, dedicated team for the community of privacy seekers. In a world full of tracking and subscriptions, we believe tools like this should be free, safe, and truly yours.",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+
+            AboutFeatureItem(
+                icon = { Icon(Icons.Filled.Lock, contentDescription = "Privacy", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp)) },
+                title = "100% Private & Local",
+                description = "No cookies. No tracking. No hidden web servers. Every download is processed entirely on your device."
+            )
+            
+            AboutFeatureItem(
+                icon = { Icon(painterResource(id = R.drawable.ic_coffee), contentDescription = "Coffee", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp)) },
+                title = "Community Supported",
+                description = "We made this app completely free and ad-free. If it has made your life easier, please consider buying us a coffee!",
+            )
+            
+            AboutFeatureItem(
+                icon = { Icon(painterResource(id = R.drawable.ic_rocket), contentDescription = "Hire Us", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp)) },
+                title = "Hire Us",
+                description = "Love the smooth experience? We are available for freelance work! Let our team build your next app idea.",
+                onClick = { uriHandler.openUri("https://teleg.one/Tom_lit") } 
+            )
+            
+            AboutFeatureItem(
+                icon = { Icon(painterResource(id = R.drawable.ic_telegram), contentDescription = "Telegram", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp)) },
+                title = "Get in Touch",
+                description = "Whether you have feedback, found a bug, or want to discuss a project, let's chat directly on Telegram.",
+                onClick = { uriHandler.openUri("https://teleg.one/Tom_lit") }
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Text(
+                "VideoFetcher is made possible thanks to incredible open-source projects like YoutubeDL and FFmpeg.",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                fontSize = 11.sp,
+                lineHeight = 14.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+            )
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("VideoFetcher v1.0.0", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.align(Alignment.CenterHorizontally), fontSize = 12.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text("Made with ❤️", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.align(Alignment.CenterHorizontally), fontSize = 12.sp)
+            Spacer(modifier = Modifier.height(32.dp))
+        }
+    }
+}
+
+@Composable
+private fun AboutFeatureItem(
+    icon: @Composable () -> Unit,
+    title: String,
+    description: String,
+    onClick: (() -> Unit)? = null
+) {
+    val modifier = if (onClick != null) {
+        Modifier.clickable { onClick() }.padding(vertical = 12.dp)
+    } else {
+        Modifier.padding(vertical = 12.dp)
+    }
+
+    Row(modifier = Modifier.fillMaxWidth().then(modifier), verticalAlignment = Alignment.Top) {
+        Box(modifier = Modifier.padding(top = 2.dp)) {
+            icon()
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(description, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f), fontSize = 12.sp, lineHeight = 16.sp)
         }
     }
 }
