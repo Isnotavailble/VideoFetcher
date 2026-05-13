@@ -73,6 +73,14 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            
+            // Tells Gradle not to attempt to strip debug symbols from these disguised ZIP files
+            keepDebugSymbols.add("**/libffmpeg.so")
+            keepDebugSymbols.add("**/libffmpeg.zip.so")
+            keepDebugSymbols.add("**/libffprobe.so")
+            keepDebugSymbols.add("**/libpython.so")
+            keepDebugSymbols.add("**/libpython.zip.so")
+            keepDebugSymbols.add("**/libqjs.so")
         }
     }
 
