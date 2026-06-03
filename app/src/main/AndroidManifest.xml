@@ -6,6 +6,7 @@
     
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     
     <!-- Permissions for Foreground Background Downloading -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -14,6 +15,8 @@
 
     <application
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="Video Fetcher"
         android:theme="@style/Theme.VideoFetcher">
         

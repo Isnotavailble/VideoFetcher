@@ -99,6 +99,7 @@ class QuickDownloadActivity : ComponentActivity() {
             VideoFetcherTheme(darkTheme = isDarkTheme) {
                 val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
                 var selectedFormat by remember { mutableStateOf("1080p") }
+                var selectedLightningFormat by remember { mutableStateOf("Best Quality") }
                 val scope = rememberCoroutineScope()
                 val context = LocalContext.current
                 val surfaceColor = MaterialTheme.colorScheme.surface
@@ -142,7 +143,8 @@ class QuickDownloadActivity : ComponentActivity() {
                     contract = ActivityResultContracts.RequestMultiplePermissions()
                 ) { _ ->
                     val storageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_AUDIO) == PackageManager.PERMISSION_GRANTED
                     } else {
                         ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
                     }
@@ -180,8 +182,7 @@ class QuickDownloadActivity : ComponentActivity() {
                     ) {
                         Text(
                             text = "VIDEO FETCHER",
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 20.sp,
+                            style = MaterialTheme.typography.headlineMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         
@@ -190,7 +191,7 @@ class QuickDownloadActivity : ComponentActivity() {
                         Text(
                             text = sharedUrl,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                            fontSize = 12.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.fillMaxWidth()
@@ -203,7 +204,7 @@ class QuickDownloadActivity : ComponentActivity() {
                                 Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                                     when (val state = videoInfoState) {
                                         is VideoInfoState.Error -> {
-                                            Text(text = state.message, color = Color.Red, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                                            Text(text = state.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 4.dp))
                                         }
                                         is VideoInfoState.Success -> {
                                             Surface(
@@ -226,26 +227,109 @@ class QuickDownloadActivity : ComponentActivity() {
                                                         )
                                                         Spacer(modifier = Modifier.width(12.dp))
                                                         Column(modifier = Modifier.weight(1f)) {
-                                                            Text(text = state.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface)
+                                                            Text(text = state.title, style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface)
                                                             Spacer(modifier = Modifier.height(4.dp))
-                                                            Text(text = state.duration, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                                                            Text(text = state.duration, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
                                                         }
                                                     }
                                                     Spacer(modifier = Modifier.height(16.dp))
-                                                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                        items(state.formats) { format ->
+
+                                                    var downloadType by remember(videoInfoState) {
+                                                        mutableStateOf(
+                                                            if (selectedFormat.contains("Audio", ignoreCase = true)) DownloadType.AUDIO else DownloadType.VIDEO
+                                                        )
+                                                    }
+
+                                                    val videoFormats = state.formats.filter { !it.contains("Audio", ignoreCase = true) }
+                                                    val audioFormats = state.formats.filter { it.contains("Audio", ignoreCase = true) }
+
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                                    ) {
+                                                        // Video Pill
+                                                        Surface(
+                                                            onClick = {
+                                                                downloadType = DownloadType.VIDEO
+                                                                val firstVideo = videoFormats.firstOrNull() ?: "Best Quality"
+                                                                selectedFormat = firstVideo
+                                                            },
+                                                            shape = RoundedCornerShape(12.dp),
+                                                            color = if (downloadType == DownloadType.VIDEO) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                                            border = if (downloadType == DownloadType.VIDEO) null else BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                                                            modifier = Modifier.weight(1f)
+                                                        ) {
+                                                            Row(
+                                                                modifier = Modifier.padding(vertical = 8.dp),
+                                                                horizontalArrangement = Arrangement.Center,
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Icon(
+                                                                    painter = painterResource(id = R.drawable.ic_video),
+                                                                    contentDescription = null,
+                                                                    modifier = Modifier.size(16.dp),
+                                                                    tint = if (downloadType == DownloadType.VIDEO) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                                                )
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                                Text(
+                                                                    text = "Video",
+                                                                    color = if (downloadType == DownloadType.VIDEO) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                                                )
+                                                            }
+                                                        }
+
+                                                        // Audio Pill
+                                                        Surface(
+                                                            onClick = {
+                                                                downloadType = DownloadType.AUDIO
+                                                                val firstAudio = audioFormats.firstOrNull() ?: "Audio (MP3) - High Quality"
+                                                                selectedFormat = firstAudio
+                                                            },
+                                                            shape = RoundedCornerShape(12.dp),
+                                                            color = if (downloadType == DownloadType.AUDIO) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                                            border = if (downloadType == DownloadType.AUDIO) null else BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                                                            modifier = Modifier.weight(1f)
+                                                        ) {
+                                                            Row(
+                                                                modifier = Modifier.padding(vertical = 8.dp),
+                                                                horizontalArrangement = Arrangement.Center,
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Icon(
+                                                                    painter = painterResource(id = R.drawable.ic_music),
+                                                                    contentDescription = null,
+                                                                    modifier = Modifier.size(16.dp),
+                                                                    tint = if (downloadType == DownloadType.AUDIO) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                                                )
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                                Text(
+                                                                    text = "Audio Only",
+                                                                    color = if (downloadType == DownloadType.AUDIO) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                                    val visibleFormats = if (downloadType == DownloadType.VIDEO) videoFormats else audioFormats
+
+                                                    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                                        items(visibleFormats) { format ->
                                                             val isSelected = selectedFormat == format
                                                             Surface(
                                                                 onClick = { selectedFormat = format },
                                                                 shape = RoundedCornerShape(16.dp),
-                                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                                                                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                                                border = if (isSelected) null else BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
                                                                 modifier = Modifier.defaultMinSize(minWidth = 64.dp)
                                                             ) {
                                                                 Text(
                                                                     text = format,
                                                                     color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                                    fontSize = 12.sp,
+                                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium),
                                                                     textAlign = TextAlign.Center,
                                                                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                                                                 )
@@ -260,7 +344,77 @@ class QuickDownloadActivity : ComponentActivity() {
                                 }
                             }
                         } else {
-                            Text("Quality: Best Available", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                                Text(
+                                    text = "Download Format",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
+                                )
+                                
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    val isVideoSelected = selectedLightningFormat == "Best Quality"
+                                    
+                                    // Video Pill
+                                    Surface(
+                                        onClick = { selectedLightningFormat = "Best Quality" },
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isVideoSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        border = if (isVideoSelected) null else BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(id = R.drawable.ic_video),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                                tint = if (isVideoSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Video (Best)",
+                                                color = if (isVideoSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                            )
+                                        }
+                                    }
+
+                                    // Audio Pill
+                                    Surface(
+                                        onClick = { selectedLightningFormat = "Audio (MP3) - High Quality" },
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (!isVideoSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        border = if (!isVideoSelected) null else BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(id = R.drawable.ic_music),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                                tint = if (!isVideoSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Audio (MP3)",
+                                                color = if (!isVideoSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                         
                         Spacer(modifier = Modifier.height(32.dp))
@@ -279,7 +433,7 @@ class QuickDownloadActivity : ComponentActivity() {
                         Button(
                             onClick = {
                                 val permissionsToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.POST_NOTIFICATIONS)
+                                    arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
                                 } else {
                                     arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE)
                                 }
@@ -291,7 +445,7 @@ class QuickDownloadActivity : ComponentActivity() {
                                 if (hasPermissions) {
                                     Toast.makeText(context, "VideoFetcher: Downloading...", Toast.LENGTH_SHORT).show()
                                     scope.launch {
-                                        val qualityToDownload = if (isResolutionSelectionEnabled) selectedFormat else "Best Quality"
+                                        val qualityToDownload = if (isResolutionSelectionEnabled) selectedFormat else selectedLightningFormat
                                         val serviceIntent = Intent(context, DownloadService::class.java).apply {
                                             action = "START_DOWNLOAD"
                                             putExtra("URL", sharedUrl)
@@ -320,14 +474,13 @@ class QuickDownloadActivity : ComponentActivity() {
                             if (isResolutionSelectionEnabled && isFetching) {
                                 CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Text(fetchingTexts[fetchingTextIndex], fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.alpha(pulseAlpha))
+                                Text(fetchingTexts[fetchingTextIndex], style = MaterialTheme.typography.titleMedium, modifier = Modifier.alpha(pulseAlpha))
                             } else {
                                 Icon(painter = painterResource(id = R.drawable.ic_download), contentDescription = null, modifier = Modifier.size(24.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "START DOWNLOAD", 
-                                    fontWeight = FontWeight.Bold, 
-                                    fontSize = 16.sp,
+                                    style = MaterialTheme.typography.titleMedium,
                                 )
                             }
                         }

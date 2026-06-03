@@ -116,6 +116,10 @@ class DownloaderViewModel : ViewModel() {
                     rawMaxHeight > 0 -> formats.add("360p")
                     else -> formats.add("Best Quality")
                 }
+                formats.add("Best Quality (M4A)")
+                formats.add("Audio (MP3) - High Quality")
+                formats.add("Audio (MP3) - Standard")
+                formats.add("Audio (MP3) - Fast")
                 val durationStr = formatDuration((info.duration * 1000).toLong())
                 
                 withContext(Dispatchers.Main) {
@@ -191,42 +195,74 @@ class DownloaderViewModel : ViewModel() {
                 val permissionManager = PermissionManager(context)
                 val customPath = permissionManager.getCustomDownloadFolderPath()
                 val targetDir = File(customPath)
-                
-                if (!targetDir.exists()) {
-                    _filesListState.value = FilesListState.Success(emptyList())
-                    return@launch
-                }
 
                 // Leverage MediaStore for lightning-fast querying of the custom folder
                 val fileSet = mutableSetOf<String>()
                 val filesList = mutableListOf<File>()
                 
                 try {
-                    val projection = arrayOf(MediaStore.Video.Media.DATA)
-                    val selection = "${MediaStore.Video.Media.DATA} LIKE ?"
-                    val selectionArgs = arrayOf("$customPath/%_vdf.mp4")
-                    val sortOrder = "${MediaStore.Video.Media.DATE_MODIFIED} DESC"
+                    val projection = arrayOf(MediaStore.MediaColumns.DATA)
+                    val selection = "${MediaStore.MediaColumns.DATA} LIKE ?"
+                    val sortOrder = "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
 
-                    context.contentResolver.query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
-                        val dataCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
-                        while (cursor.moveToNext()) {
-                            val path = cursor.getString(dataCol)
-                            val file = File(path)
-                            if (file.exists() && fileSet.add(path)) {
-                                filesList.add(file)
+                    // Query MediaStore for ALL _vdf files
+                    val mediaUris = listOf(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, MediaStore.Files.getContentUri("external"))
+                    for (uri in mediaUris) {
+                        context.contentResolver.query(uri, projection, selection, arrayOf("$customPath/%_vdf.%"), sortOrder)?.use { cursor ->
+                            val dataCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
+                            while (cursor.moveToNext()) {
+                                val path = cursor.getString(dataCol)
+                                val file = File(path)
+                                if (file.exists() && fileSet.add(path)) {
+                                    filesList.add(file)
+                                }
                             }
                         }
                     }
+
+
                 } catch (e: Exception) { e.printStackTrace() }
 
                 // Fallback: Ensure we don't miss new files not yet scanned by MediaStore
-                targetDir.listFiles { file ->
-                    file.isFile && file.name.endsWith("_vdf.mp4", ignoreCase = true) && fileSet.add(file.absolutePath)
-                }?.let { filesList.addAll(it.sortedByDescending { f -> f.lastModified() }) }
+                val fileRegex = Regex(".*_vdf\\.[^.]+$", RegexOption.IGNORE_CASE)
+                val directFiles = targetDir.listFiles { file ->
+                    file.isFile && file.name.matches(fileRegex) && fileSet.add(file.absolutePath)
+                }
+                
+                if (directFiles != null) {
+                    filesList.addAll(directFiles.sortedByDescending { f -> f.lastModified() })
+                }
+
+                // SAF Fallback: If app was reinstalled, Scoped Storage blocks listFiles() on old files.
+                // We must read the actual directory using the SAF tree URI.
+                val possibleUris = listOfNotNull(
+                    permissionManager.getSavedFolderUri(),
+                    permissionManager.getCustomDownloadFolderUri()
+                )
+                
+                for (treeUri in possibleUris) {
+                    try {
+                        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+                        context.contentResolver.query(childrenUri, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
+                            val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                            while (cursor.moveToNext()) {
+                                val name = cursor.getString(nameCol)
+                                if (name != null && name.matches(fileRegex)) {
+                                    val file = File(targetDir, name)
+                                    if (fileSet.add(file.absolutePath)) {
+                                        filesList.add(file)
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
                 
                 val files = filesList.toTypedArray()
 
-                val thumbCacheDir = File(context?.cacheDir, "thumbnails")
+                val thumbCacheDir = File(context.cacheDir, "thumbnails")
                 if (!thumbCacheDir.exists()) {
                     thumbCacheDir.mkdirs()
                 }
@@ -272,8 +308,21 @@ class DownloaderViewModel : ViewModel() {
                         var attempts = 0
                         while (!fileReadable && attempts < 10) {
                             try {
-                                retriever.setDataSource(file.absolutePath)
-                                fileReadable = true
+                                val ext = file.extension.lowercase()
+                                val mimeType = if (ext in listOf("mp3", "m4a")) "audio/*" else "video/*"
+                                val uri = getFileUri(context, file.absolutePath, mimeType)
+                                
+                                if (uri != null) {
+                                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                                        retriever.setDataSource(pfd.fileDescriptor)
+                                        fileReadable = true
+                                    }
+                                }
+                                
+                                if (!fileReadable) {
+                                    retriever.setDataSource(file.absolutePath)
+                                    fileReadable = true
+                                }
                             } catch (e: Exception) {
                                 attempts++
                                 if (attempts < 10) delay(500)
@@ -333,14 +382,14 @@ class DownloaderViewModel : ViewModel() {
             cleanName = cleanName.substring(0, cleanName.length - 4)
         }
 
-        val signatureRegex = """(.*)[\s_](\(\d+p?\))""".toRegex()
+        val signatureRegex = """(.*)[\s_](\([^)]+\))$""".toRegex()
         val matchResult = signatureRegex.find(cleanName)
         
         return if (matchResult != null) {
             val (title, signature) = matchResult.destructured
             title.replace("_", " ") to signature
         } else {
-            cleanName.replace("_", " ") to "(MP4)"
+            cleanName.replace("_", " ") to "(${fileName.substring(lastIndex + 1).uppercase()})"
         }
     }
 
@@ -362,60 +411,96 @@ class DownloaderViewModel : ViewModel() {
         }
     }
 
+    private fun getFileUri(context: Context, absolutePath: String, mimeType: String): Uri? {
+        val file = File(absolutePath)
+        
+        // 1. Try MediaStore
+        try {
+            val baseUri = if (mimeType.startsWith("audio")) MediaStore.Audio.Media.EXTERNAL_CONTENT_URI else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            val projection = arrayOf(MediaStore.Files.FileColumns._ID)
+            val selection = "${MediaStore.Files.FileColumns.DATA} = ?"
+            val selectionArgs = arrayOf(absolutePath)
+            
+            context.contentResolver.query(baseUri, projection, selection, selectionArgs, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID))
+                    return ContentUris.withAppendedId(baseUri, id)
+                }
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+
+        // 2. Try SAF
+        try {
+            val permissionManager = PermissionManager(context)
+            val possibleUris = listOfNotNull(permissionManager.getSavedFolderUri(), permissionManager.getCustomDownloadFolderUri())
+            for (treeUri in possibleUris) {
+                val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+                context.contentResolver.query(childrenUri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
+                    val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    while (cursor.moveToNext()) {
+                        if (cursor.getString(nameCol) == file.name) {
+                            return DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(idCol))
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+        
+        // 3. Try FileProvider if file is readable directly
+        if (file.exists()) {
+            try {
+                return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+        
+        return null
+    }
+
     fun playVideo(context: Context, fileDetails: DownloadedFileDetails) {
         try {
             val file = File(fileDetails.path)
-            if (!file.exists()) return
-
-            val authority = "${context.packageName}.fileprovider"
-            val uri = FileProvider.getUriForFile(context, authority, file)
+            val ext = file.extension.lowercase()
+            val mimeType = if (ext in listOf("mp3", "m4a")) "audio/*" else "video/*"
+            
+            val uri = getFileUri(context, fileDetails.path, mimeType)
+            if (uri == null) {
+                android.widget.Toast.makeText(context, "Cannot access file. Try resetting download folder.", android.widget.Toast.LENGTH_SHORT).show()
+                return
+            }
 
             val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "video/*")
+                setDataAndType(uri, mimeType)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(Intent.createChooser(intent, "Play with..."))
         } catch (e: Exception) {
             e.printStackTrace()
-            // Optionally, show a toast or update a state with the error
         }
     }
 
     fun shareVideo(context: Context, fileDetails: DownloadedFileDetails) {
         try {
             val file = File(fileDetails.path)
-            if (!file.exists()) return
-
-            var mediaStoreUri: Uri? = null
-
-            // Step 1: Try to get the native MediaStore Gallery URI (Social Media apps prefer this for video previews)
-            try {
-                val projection = arrayOf(MediaStore.Video.Media._ID)
-                val selection = "${MediaStore.Video.Media.DATA} = ?"
-                val selectionArgs = arrayOf(file.absolutePath)
-                
-                context.contentResolver.query(
-                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                    projection, selection, selectionArgs, null
-                )?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID))
-                        mediaStoreUri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
+            val ext = file.extension.lowercase()
+            val mimeType = when (ext) {
+                "mp3" -> "audio/mpeg"
+                "m4a" -> "audio/mp4"
+                else -> "video/mp4"
             }
-
-            // Step 2: Fallback to FileProvider if the video hasn't been scanned by MediaStore yet
-            val finalUri = mediaStoreUri ?: FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            
+            val uri = getFileUri(context, fileDetails.path, mimeType)
+            if (uri == null) {
+                android.widget.Toast.makeText(context, "Cannot access file.", android.widget.Toast.LENGTH_SHORT).show()
+                return
+            }
 
             val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "video/mp4" // Be strictly specific so Telegram/WhatsApp don't fallback to "file" mode
-                putExtra(Intent.EXTRA_STREAM, finalUri)
+                type = mimeType
+                putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(intent, "Share video..."))
+            context.startActivity(Intent.createChooser(intent, "Share..."))
         } catch (e: Exception) {
             e.printStackTrace()
         }

@@ -1,4 +1,12 @@
 # VideoFetcher - Project Documentation
+## Rules: 
+- always respect the .gitignore rules and never track ignored files (e.g., `local.properties`, `build/`, `.gradle`, `videofetcher.jks`, `key.properties`).
+- do not use the `material-icons-extended` library to avoid bloating the APK size. Instead, create custom lightweight XML vector drawables for any missing icons and apply theme colors dynamically in Compose.
+- avoid using local databases (like Room or SQLite) to track downloaded files, as they will be wiped on app reinstall. Instead, append a custom signature (e.g., `_vdf`) to downloaded filenames to allow instant recognition via MediaStore queries.
+- use Storage Access Framework (SAF) for custom folder selection and persistent file management, and never request `MANAGE_EXTERNAL_STORAGE` to ensure compliance with Google Play policies.
+- maintain clean and breathable UI layouts with proper typography hierarchies, using appropriate line heights and compact icon layouts to conserve screen space.
+- follow the good UIUX with black and white colors and good typography. You must strictly use the unified `AppTypography` and semantic colors defined in the global theme provider (`Theme.kt`). Never hardcode `fontSize = X.sp` or colors (like `Color.Red`) directly in composables. Instead, reference `MaterialTheme.typography` and `MaterialTheme.colorScheme` to ensure cross-OS consistency (e.g., bypassing MIUI Force-Dark inversion bugs).
+
 
 ## Overview
 
@@ -56,4 +64,4 @@ The app acts as a robust **Download Manager**, capable of downloading multiple v
 - **Iconography:** Do **NOT** use the `material-icons-extended` library, as it drastically bloats the APK size. If an icon is missing from the core Material icons, create a custom lightweight XML vector drawable in `res/drawable/` (e.g., `ic_pause.xml`) and apply theme colors dynamically using Compose's `tint` parameter.
 - **Stateless File Management:** Avoid local databases (Room/SQLite) to track downloaded files, as they wipe on reinstall. Always append the custom `_vdf` signature (e.g., `video_name_(1080p)_vdf.mp4`) to filenames. This allows the app to recognize its own files instantly via MediaStore.
 - **Storage Permissions:** Use Storage Access Framework (SAF) `ACTION_OPEN_DOCUMENT_TREE` for custom folder selection and persistent file management. Never request `MANAGE_EXTERNAL_STORAGE` to guarantee strict Google Play compliance.
-- **UI/UX Typography & Layouts:** Maintain clean, breathable visual hierarchies. Use proper `lineHeight` ratios (e.g., `16.sp` line height for `12.sp` text). For list items (like download cards), prefer compact horizontal icon layouts over bulky vertical text buttons to conserve screen real estate.
+- **UI/UX Typography & Layouts:** Maintain clean, breathable visual hierarchies. All typography must strictly use the unified `AppTypography` defined in `Theme.kt` (accessed via `MaterialTheme.typography`) to ensure consistent `lineHeight` ratios globally. For list items (like download cards), prefer compact horizontal icon layouts over bulky vertical text buttons to conserve screen real estate.

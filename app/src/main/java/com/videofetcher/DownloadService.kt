@@ -75,12 +75,10 @@ class DownloadService : Service() {
         activeQualities[url] = quality
         DownloadManager.updateDownloadState(url, DownloadState.Downloading(0f, "0% • Starting..."))
         
-        val initialNotification = createNotification("0% • Starting...", 0, url)
+        val initialNotification = createNotification("0% • Starting...", 0)
         startForeground(notificationId, initialNotification.build())
         
         val job = serviceScope.launch {
-            var isCancelled = false
-            var isPausing = false
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             
             try {
@@ -100,40 +98,60 @@ class DownloadService : Service() {
 
                 val request = YoutubeDLRequest(url)
                 
-                val targetHeight = when (quality) {
-                    "4K" -> "2160"
-                    "2K" -> "1440"
-                    "Best Quality" -> "best"
+                val targetHeight = when {
+                    quality == "4K" -> "2160"
+                    quality == "2K" -> "1440"
+                    quality == "Best Quality" -> "best"
+                    quality == "Best Quality (M4A)" -> "audio"
+                    quality.startsWith("Audio (MP3)") -> "audio"
                     else -> quality.replace("p", "")
                 }
                 
-                val resolutionSignature = if (quality == "Best Quality") "(Best)" else "(${quality})"
+                val resolutionSignature = when {
+                    quality == "Best Quality" -> "(Best)"
+                    quality == "Best Quality (M4A)" -> "(M4A)"
+                    quality == "Audio (MP3) - High Quality" -> "(MP3_High)"
+                    quality == "Audio (MP3) - Standard" -> "(MP3_Std)"
+                    quality == "Audio (MP3) - Fast" -> "(MP3_Fast)"
+                    else -> "(${quality.replace(" ", "_")})"
+                }
 
                 if (quality == "Best Quality") {
                     request.addOption("-f", "bestvideo+bestaudio/best")
+                } else if (quality == "Best Quality (M4A)") {
+                    request.addOption("-f", "bestaudio[ext=m4a]/bestaudio")
+                    request.addOption("--extract-audio")
+                    request.addOption("--audio-format", "m4a")
+                } else if (quality.startsWith("Audio (MP3)")) {
+                    request.addOption("-f", "bestaudio")
+                    request.addOption("--extract-audio")
+                    request.addOption("--audio-format", "mp3")
+                    when (quality) {
+                        "Audio (MP3) - High Quality" -> request.addOption("--audio-quality", "320K")
+                        "Audio (MP3) - Standard" -> request.addOption("--audio-quality", "192K")
+                        "Audio (MP3) - Fast" -> request.addOption("--audio-quality", "128K")
+                    }
                 } else {
                     // Force H.264/AVC compatible codecs for Android gallery support, fallback to any if missing
                     request.addOption("-f", "bestvideo[height<=$targetHeight][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=$targetHeight]+bestaudio/best")
                 }
                 
-                // Embed thumbnail directly into the MP4 file
+                // Embed thumbnail directly into the file
                 request.addOption("--embed-thumbnail")
-                request.addOption("--merge-output-format", "mp4")
+                if (quality != "Best Quality (M4A)" && !quality.startsWith("Audio (MP3)")) {
+                    request.addOption("--merge-output-format", "mp4")
+                }
                 request.addOption("--restrict-filenames")
                 request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}_vdf.%(ext)s")
                 request.addOption("--concurrent-fragments", "4")
 
                 var lastUpdateTime = 0L
                 var lastProgress = -1f
-                var currentProgress = 0f
 
                 YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
                     if (!isActive) {
-                        isCancelled = true
                         return@execute
                     }
-                    
-                    currentProgress = progress
 
                     val isConverting = line.contains("[ffmpeg]") || line.contains("Merging") || progress >= 100f
                     val currentTime = System.currentTimeMillis()
@@ -153,7 +171,7 @@ class DownloadService : Service() {
                             status = statusText
                         ))
 
-                        val notification = createNotification(statusText, progress.toInt(), url)
+                        val notification = createNotification(statusText, progress.toInt())
                         notificationManager.notify(notificationId, notification.build())
                     }
                 }
@@ -169,9 +187,14 @@ class DownloadService : Service() {
                     notificationManager.notify(notificationId + 1, successNotification)
                     notificationManager.cancel(notificationId)
 
-                    val newFile = targetDir.listFiles()?.maxByOrNull { it.lastModified() }
-                    if (newFile != null) {
-                        MediaScannerConnection.scanFile(applicationContext, arrayOf(newFile.absolutePath), null, null)
+                    // Scan recently modified files instead of just the single newest one to prevent race conditions in parallel downloads
+                    val recentFiles = targetDir.listFiles()?.filter { 
+                        System.currentTimeMillis() - it.lastModified() < 60000 // Modified in the last 60 seconds
+                    } ?: emptyList()
+                    
+                    val pathsToScan = recentFiles.map { it.absolutePath }.toTypedArray()
+                    if (pathsToScan.isNotEmpty()) {
+                        MediaScannerConnection.scanFile(applicationContext, pathsToScan, null, null)
                     }
                 }
 
@@ -259,7 +282,7 @@ class DownloadService : Service() {
         }
     }
 
-    private fun createNotification(status: String, progress: Int, url: String): NotificationCompat.Builder {
+    private fun createNotification(status: String, progress: Int): NotificationCompat.Builder {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("Downloading Video...")

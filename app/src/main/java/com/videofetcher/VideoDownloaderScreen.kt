@@ -62,6 +62,10 @@ import kotlinx.coroutines.delay
 enum class AppTab { HOME, FILES, SETTINGS }
 
 @OptIn(ExperimentalMaterial3Api::class)
+enum class DownloadType {
+    VIDEO, AUDIO
+}
+
 @Composable
 fun VideoDownloaderUI(
     viewModel: DownloaderViewModel = viewModel(),
@@ -73,6 +77,7 @@ fun VideoDownloaderUI(
     val clipboardManager = LocalClipboardManager.current
     var url by remember { mutableStateOf("") }
     var selectedFormat by remember { mutableStateOf("1080p") }
+    var selectedLightningFormat by remember { mutableStateOf("Best Quality") }
     val engineState by viewModel.engineState.collectAsState()
     val activeDownloads by viewModel.activeDownloads.collectAsState()
     val videoInfoState by viewModel.videoInfoState.collectAsState()
@@ -104,7 +109,7 @@ fun VideoDownloaderUI(
     // Determine which storage permissions to ask for based on Android version
     val storagePermissions = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(Manifest.permission.READ_MEDIA_VIDEO)
+            arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_AUDIO)
         } else {
             arrayOf(
                 Manifest.permission.READ_EXTERNAL_STORAGE,
@@ -250,6 +255,8 @@ fun VideoDownloaderUI(
                     isResolutionSelectionEnabled = isResolutionSelectionEnabled,
                     selectedFormat = selectedFormat,
                     onFormatChange = { selectedFormat = it },
+                    selectedLightningFormat = selectedLightningFormat,
+                    onLightningFormatChange = { selectedLightningFormat = it },
                     engineState = engineState,
                     videoInfoState = videoInfoState,
                     activeDownloads = activeDownloads,
@@ -287,6 +294,8 @@ fun HomeContent(
     isResolutionSelectionEnabled: Boolean,
     selectedFormat: String,
     onFormatChange: (String) -> Unit,
+    selectedLightningFormat: String,
+    onLightningFormatChange: (String) -> Unit,
     engineState: EngineState,
     videoInfoState: VideoInfoState,
     activeDownloads: Map<String, DownloadState>,
@@ -374,7 +383,7 @@ fun HomeContent(
             Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                 when (val state = videoInfoState) {
                     is VideoInfoState.Error -> {
-                        Text(text = state.message, color = Color.Red, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                        Text(text = state.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 4.dp))
                     }
                     is VideoInfoState.Success -> {
                         Surface(
@@ -397,26 +406,109 @@ fun HomeContent(
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(text = state.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface)
+                                        Text(text = state.title, style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface)
                                         Spacer(modifier = Modifier.height(4.dp))
-                                        Text(text = state.duration, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                                        Text(text = state.duration, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
                                     }
                                 }
                                 Spacer(modifier = Modifier.height(16.dp))
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    items(state.formats) { format ->
+
+                                var downloadType by remember(videoInfoState) {
+                                    mutableStateOf(
+                                        if (selectedFormat.contains("Audio", ignoreCase = true)) DownloadType.AUDIO else DownloadType.VIDEO
+                                    )
+                                }
+
+                                val videoFormats = state.formats.filter { !it.contains("Audio", ignoreCase = true) }
+                                val audioFormats = state.formats.filter { it.contains("Audio", ignoreCase = true) }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    // Video Pill
+                                    Surface(
+                                        onClick = {
+                                            downloadType = DownloadType.VIDEO
+                                            val firstVideo = videoFormats.firstOrNull() ?: "Best Quality"
+                                            onFormatChange(firstVideo)
+                                        },
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (downloadType == DownloadType.VIDEO) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        border = if (downloadType == DownloadType.VIDEO) null else BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(id = R.drawable.ic_video),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                                tint = if (downloadType == DownloadType.VIDEO) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Video",
+                                                color = if (downloadType == DownloadType.VIDEO) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                            )
+                                        }
+                                    }
+
+                                    // Audio Pill
+                                    Surface(
+                                        onClick = {
+                                            downloadType = DownloadType.AUDIO
+                                            val firstAudio = audioFormats.firstOrNull() ?: "Audio (MP3) - High Quality"
+                                            onFormatChange(firstAudio)
+                                        },
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (downloadType == DownloadType.AUDIO) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        border = if (downloadType == DownloadType.AUDIO) null else BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(id = R.drawable.ic_music),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                                tint = if (downloadType == DownloadType.AUDIO) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Audio Only",
+                                                color = if (downloadType == DownloadType.AUDIO) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                val visibleFormats = if (downloadType == DownloadType.VIDEO) videoFormats else audioFormats
+
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    items(visibleFormats) { format ->
                                         val isSelected = selectedFormat == format
                                         Surface(
                                             onClick = { onFormatChange(format) },
                                             shape = RoundedCornerShape(16.dp),
-                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                            border = if (isSelected) null else BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
                                             modifier = Modifier.defaultMinSize(minWidth = 64.dp)
                                         ) {
                                             Text(
                                                 text = format,
                                                 color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                fontSize = 12.sp,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium),
                                                 textAlign = TextAlign.Center,
                                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                                             )
@@ -427,6 +519,80 @@ fun HomeContent(
                         }
                     }
                     else -> {}
+                }
+            }
+        }
+
+        AnimatedVisibility(visible = !isResolutionSelectionEnabled) {
+            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                Text(
+                    text = "Download Format",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
+                )
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    val isVideoSelected = selectedLightningFormat == "Best Quality"
+                    
+                    // Video Pill
+                    Surface(
+                        onClick = { onLightningFormatChange("Best Quality") },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isVideoSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                        border = if (isVideoSelected) null else BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_video),
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = if (isVideoSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Video (Best)",
+                                color = if (isVideoSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
+
+                    // Audio Pill
+                    Surface(
+                        onClick = { onLightningFormatChange("Audio (MP3) - High Quality") },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (!isVideoSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                        border = if (!isVideoSelected) null else BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_music),
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = if (!isVideoSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Audio (MP3)",
+                                color = if (!isVideoSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -451,7 +617,7 @@ fun HomeContent(
                     viewModel.analyzeUrl(url)
                 } else {
                     if (hasStoragePermission) {
-                        val qualityToDownload = if (isResolutionSelectionEnabled) selectedFormat else "Best Quality"
+                        val qualityToDownload = if (isResolutionSelectionEnabled) selectedFormat else selectedLightningFormat
                         viewModel.startDownload(url, qualityToDownload, context.applicationContext)
                         onUrlChange("") 
                     } else {
@@ -472,15 +638,15 @@ fun HomeContent(
             if (isResolutionSelectionEnabled && isFetching) {
                 CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
                 Spacer(modifier = Modifier.width(12.dp))
-                Text(fetchingTexts[fetchingTextIndex], fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.alpha(pulseAlpha))
+                Text(fetchingTexts[fetchingTextIndex], style = MaterialTheme.typography.titleMedium, modifier = Modifier.alpha(pulseAlpha))
             } else if (isResolutionSelectionEnabled && needsAnalysis) {
                 Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Next", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text("Next", style = MaterialTheme.typography.titleMedium)
             } else {
                 Icon(painterResource(id = R.drawable.ic_download), contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Download", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text("Download", style = MaterialTheme.typography.titleMedium)
             }
         }
 
@@ -506,7 +672,7 @@ fun HomeContent(
                     Text(
                         text = "No downloads yet.",
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                        fontSize = 14.sp,
+                        style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -542,6 +708,7 @@ fun FilesContent(
 
     var fileAwaitingPermission by remember { mutableStateOf<DownloadedFileDetails?>(null) }
     var showFolderInstructionDialog by remember { mutableStateOf(false) }
+    var expandedSection by remember { mutableStateOf("VIDEO") }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -629,7 +796,7 @@ fun FilesContent(
                         )
                     }
                 ) {
-                    Text("Delete", color = Color.Red, fontWeight = FontWeight.Bold)
+                    Text("Delete", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -660,7 +827,7 @@ fun FilesContent(
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("Storage Permission Missing", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
                             Spacer(modifier = Modifier.height(4.dp))
-                            Text("We need access to your storage to display and manage your downloaded videos.", textAlign = TextAlign.Center, fontSize = 12.sp, color = MaterialTheme.colorScheme.onErrorContainer)
+                            Text("We need access to your storage to display and manage your downloaded videos.", textAlign = TextAlign.Center, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onErrorContainer)
                             Spacer(modifier = Modifier.height(12.dp))
                             Button(
                                 onClick = onRequestPermission,
@@ -687,29 +854,88 @@ fun FilesContent(
 
             when (val filesList = filesListState) {
                 is FilesListState.Success -> {
-                    if (filesList.files.isNotEmpty()) {
+                    val videoRegex = Regex(".*_vdf\\.mp4$", RegexOption.IGNORE_CASE)
+                    val audioRegex = Regex(".*_vdf\\.(?!mp4)[^.]+$", RegexOption.IGNORE_CASE)
+                    
+                    val videoFiles = filesList.files.filter { it.path.matches(videoRegex) }
+                    val audioFiles = filesList.files.filter { it.path.matches(audioRegex) }
+
+                    if (filesList.files.isEmpty() && pausedDownloads.isEmpty()) {
+                        item { Text("No downloads yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)) }
+                    } else {
+                        // Video Downloads Header
                         stickyHeader {
-                            Box(
+                            Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .background(MaterialTheme.colorScheme.background)
-                                    .padding(vertical = 8.dp)
+                                    .clickable { expandedSection = if (expandedSection == "VIDEO") "NONE" else "VIDEO" }
+                                    .padding(vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Downloaded Videos", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                                Text("Video Downloads", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                                Icon(
+                                    imageVector = if (expandedSection == "VIDEO") Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                                    contentDescription = "Expand/Collapse",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
                             }
                         }
-                    } else if (pausedDownloads.isEmpty()) {
-                        item { Text("No downloads yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)) }
-                    }
-                    items(items = filesList.files, key = { it.path }) { file ->
-                        DownloadedVideoCard(
-                            file = file,
-                            viewModel = viewModel,
-                            context = context,
-                            onDelete = { fileToDelete ->
-                                fileToConfirmDelete = fileToDelete
+
+                        if (expandedSection == "VIDEO") {
+                            if (videoFiles.isEmpty()) {
+                                item {
+                                    Text("No video downloads yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.padding(bottom = 16.dp))
+                                }
+                            } else {
+                                items(items = videoFiles, key = { it.path }) { file ->
+                                    DownloadedVideoCard(
+                                        file = file,
+                                        viewModel = viewModel,
+                                        context = context,
+                                        onDelete = { fileToDelete -> fileToConfirmDelete = fileToDelete }
+                                    )
+                                }
                             }
-                        )
+                        }
+
+                        // Audio Downloads Header
+                        stickyHeader {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(MaterialTheme.colorScheme.background)
+                                    .clickable { expandedSection = if (expandedSection == "AUDIO") "NONE" else "AUDIO" }
+                                    .padding(vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Audio Downloads", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                                Icon(
+                                    imageVector = if (expandedSection == "AUDIO") Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                                    contentDescription = "Expand/Collapse",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        if (expandedSection == "AUDIO") {
+                            if (audioFiles.isEmpty()) {
+                                item {
+                                    Text("No audio downloads yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.padding(bottom = 16.dp))
+                                }
+                            } else {
+                                items(items = audioFiles, key = { it.path }) { file ->
+                                    DownloadedVideoCard(
+                                        file = file,
+                                        viewModel = viewModel,
+                                        context = context,
+                                        onDelete = { fileToDelete -> fileToConfirmDelete = fileToDelete }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
                 is FilesListState.Error -> { item { ErrorCard(filesList.message) } }
@@ -753,7 +979,7 @@ fun SettingsContent(
         Text("Settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
         Spacer(modifier = Modifier.height(24.dp))
 
-        Text("Appearance", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp)
+        Text("Appearance", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
         Spacer(modifier = Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
@@ -780,7 +1006,7 @@ fun SettingsContent(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
 
-        Text("Downloads", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp)
+        Text("Downloads", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
         Spacer(modifier = Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
@@ -807,7 +1033,7 @@ fun SettingsContent(
         
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
         
-        Text("Storage & Cache", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp)
+        Text("Storage & Cache", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
         Spacer(modifier = Modifier.height(8.dp))
         
         Row(
@@ -897,79 +1123,109 @@ fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: Dow
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.secondaryContainer,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(80.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
-                contentAlignment = Alignment.Center
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = "Thumbnail Placeholder",
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-            Spacer(modifier = Modifier.width(16.dp))
-            
-            Column(modifier = Modifier.weight(1f)) {
-                val (titleText, titleColor) = when (downloadState) {
-                    is DownloadState.Queued -> "Queued" to MaterialTheme.colorScheme.onSurface
-                    is DownloadState.Downloading -> "Downloading..." to MaterialTheme.colorScheme.primary
-                    is DownloadState.Success -> "Completed" to Color(0xFF00C853) // Green
-                    is DownloadState.Error -> "Failed" to Color.Red
-                    is DownloadState.Cancelled -> "Cancelled" to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                val iconColor = when (downloadState) {
+                    is DownloadState.Queued -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    is DownloadState.Downloading -> MaterialTheme.colorScheme.primary
+                    is DownloadState.Success -> MaterialTheme.colorScheme.tertiary
+                    is DownloadState.Error -> MaterialTheme.colorScheme.error
+                    is DownloadState.Cancelled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 }
+
+                val iconVector = when (downloadState) {
+                    is DownloadState.Queued -> Icons.Filled.Info
+                    is DownloadState.Downloading -> null
+                    is DownloadState.Success -> Icons.Filled.Check
+                    is DownloadState.Error -> Icons.Filled.Warning
+                    is DownloadState.Cancelled -> Icons.Filled.Close
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(48.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (downloadState is DownloadState.Downloading) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_download),
+                            contentDescription = "Downloading",
+                            tint = iconColor,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = iconVector!!,
+                            contentDescription = "State Icon",
+                            tint = iconColor,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(16.dp))
                 
-                Text(text = titleText, fontWeight = FontWeight.Bold, fontSize = 14.sp, lineHeight = 18.sp, color = titleColor)
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(text = url, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                
-                if (isDownloading) {
-                    val state = downloadState as DownloadState.Downloading
-                    Spacer(modifier = Modifier.height(4.dp))
-                    LinearProgressIndicator(
-                        progress = { state.progress },
-                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(text = state.status, fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                } else if (downloadState is DownloadState.Error) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(text = downloadState.message, fontSize = 12.sp, lineHeight = 16.sp, color = Color.Red.copy(alpha = 0.8f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-            }
-            
-            if (isFinished) {
-                Spacer(modifier = Modifier.width(8.dp))
-                IconButton(onClick = { viewModel.resetState(url) }) {
-                    Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = MaterialTheme.colorScheme.onSurface)
-                }
-            } else {
-                Spacer(modifier = Modifier.width(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    val (titleText, titleColor) = when (downloadState) {
+                        is DownloadState.Queued -> "Queued" to MaterialTheme.colorScheme.onSurface
+                        is DownloadState.Downloading -> "Downloading..." to MaterialTheme.colorScheme.primary
+                        is DownloadState.Success -> "Completed" to MaterialTheme.colorScheme.tertiary
+                        is DownloadState.Error -> "Failed" to MaterialTheme.colorScheme.error
+                        is DownloadState.Cancelled -> "Cancelled" to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    }
+                    
+                    Text(text = titleText, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = titleColor)
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(text = url, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                    
                     if (isDownloading) {
-                        IconButton(onClick = { viewModel.pauseDownload(context.applicationContext, url) }) {
-                            Icon(
-                                painter = painterResource(id = R.drawable.ic_pause),
-                                contentDescription = "Pause",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
+                        val state = downloadState as DownloadState.Downloading
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(text = state.status, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                    } else if (downloadState is DownloadState.Error) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(text = downloadState.message, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                
+                if (isFinished) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(onClick = { viewModel.resetState(url) }) {
+                        Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = MaterialTheme.colorScheme.onSurface)
+                    }
+                } else {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (isDownloading) {
+                            IconButton(onClick = { viewModel.pauseDownload(context.applicationContext, url) }) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_pause),
+                                    contentDescription = "Pause",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        IconButton(onClick = { viewModel.cancelDownload(context.applicationContext, url) }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Cancel", tint = MaterialTheme.colorScheme.error)
                         }
                     }
-                    IconButton(onClick = { viewModel.cancelDownload(context.applicationContext, url) }) {
-                        Icon(Icons.Filled.Close, contentDescription = "Cancel", tint = Color.Red)
-                    }
                 }
+            }
+
+            // Edge to edge progress bar
+            if (isDownloading) {
+                val state = downloadState as DownloadState.Downloading
+                LinearProgressIndicator(
+                    progress = { state.progress },
+                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                )
             }
         }
     }
@@ -1103,6 +1359,7 @@ fun DownloadedVideoCard(
     onDelete: (DownloadedFileDetails) -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    val isAudio = file.path.endsWith(".mp3", ignoreCase = true) || file.path.endsWith(".m4a", ignoreCase = true)
 
         Row(
             modifier = Modifier
@@ -1124,12 +1381,20 @@ fun DownloadedVideoCard(
                         .clip(RoundedCornerShape(8.dp)),
                     loading = {
                         Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                            if (isAudio) {
+                                Icon(painterResource(id = R.drawable.ic_earphone), contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                            } else {
+                                Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                            }
                         }
                     },
                     error = {
                         Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                            if (isAudio) {
+                                Icon(painterResource(id = R.drawable.ic_earphone), contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                            } else {
+                                Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                            }
                         }
                     }
                 )
@@ -1187,9 +1452,9 @@ fun DownloadedVideoCard(
                     DropdownMenuItem(
                         text = { 
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Delete, contentDescription = "Delete", modifier = Modifier.size(20.dp), tint = Color.Red)
+                                Icon(Icons.Filled.Delete, contentDescription = "Delete", modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Delete", color = Color.Red) 
+                                Text("Delete", color = MaterialTheme.colorScheme.error) 
                             }
                         },
                         onClick = { 
@@ -1284,7 +1549,7 @@ fun PausedVideoCard(paused: PausedDownload, onResume: () -> Unit, onCancel: () -
                     Icon(Icons.Filled.PlayArrow, contentDescription = "Resume", tint = MaterialTheme.colorScheme.primary)
                 }
                 IconButton(onClick = onCancel) {
-                    Icon(Icons.Filled.Close, contentDescription = "Cancel", tint = Color.Red)
+                    Icon(Icons.Filled.Close, contentDescription = "Cancel", tint = MaterialTheme.colorScheme.error)
                 }
             }
         }
@@ -1303,10 +1568,10 @@ fun ErrorCard(message: String) {
                 Icon(
                     imageVector = Icons.Filled.Warning,
                     contentDescription = "Error",
-                    tint = Color.Red
+                    tint = MaterialTheme.colorScheme.error
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(message, color = Color.Red, style = MaterialTheme.typography.bodyMedium)
+                Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
             }
         }
     }
