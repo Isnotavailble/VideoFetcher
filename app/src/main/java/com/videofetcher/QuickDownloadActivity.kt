@@ -111,6 +111,7 @@ class QuickDownloadActivity : ComponentActivity() {
                 val engineUpdateState by viewModel.engineUpdateState.collectAsState()
 
                 LaunchedEffect(Unit) {
+                    viewModel.initializeEngine(context.applicationContext)
                     viewModel.checkForEngineUpdate(context.applicationContext)
                 }
 
