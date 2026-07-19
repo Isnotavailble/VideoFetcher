@@ -16,17 +16,24 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 
 class DownloadService : Service() {
     private val serviceJob = Job()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
     
     private val CHANNEL_ID = "VideoFetcherDownloadChannel"
-    private val NOTIFICATION_ID = 1001
     
-    private var isCancelled = false
+    private val activeJobs = ConcurrentHashMap<String, Job>()
+    private val activeQualities = ConcurrentHashMap<String, String>()
+    private val pendingQueue = CopyOnWriteArrayList<Pair<String, String>>()
+    
+    // Temporary hardcode: Will be connected to Settings in Phase 3
+    private val maxParallelDownloads = 3
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -36,51 +43,116 @@ class DownloadService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == "CANCEL_DOWNLOAD") {
-            cancelDownload()
-            return START_NOT_STICKY
-        }
-
+        val action = intent?.action
         val url = intent?.getStringExtra("URL") ?: return START_NOT_STICKY
-        val quality = intent.getStringExtra("QUALITY") ?: "1080p"
+        
+        when (action) {
+            "PAUSE_DOWNLOAD" -> pauseDownload(url)
+            "CANCEL_DOWNLOAD" -> cancelDownload(url)
+            "START_DOWNLOAD" -> {
+                val quality = intent.getStringExtra("QUALITY") ?: "1080p"
+                
+                if (activeJobs.containsKey(url) || pendingQueue.any { it.first == url }) {
+                    return START_NOT_STICKY // Already active or queued
+                }
 
-        isCancelled = false
-        val initialNotification = createNotification("Starting download...", 0)
-        startForeground(NOTIFICATION_ID, initialNotification.build())
-
-        startBackgroundDownload(url, quality)
+                if (activeJobs.size >= maxParallelDownloads) {
+                    pendingQueue.add(Pair(url, quality))
+                    DownloadManager.updateDownloadState(url, DownloadState.Queued)
+                } else {
+                    startBackgroundDownload(url, quality)
+                }
+            }
+        }
 
         return START_NOT_STICKY
     }
 
     private fun startBackgroundDownload(url: String, quality: String) {
-        serviceScope.launch {
+        val processId = "downloader_${url.hashCode()}"
+        val notificationId = url.hashCode()
+        
+        activeQualities[url] = quality
+        DownloadManager.updateDownloadState(url, DownloadState.Downloading(0f, "0% • Starting..."))
+        
+        val initialNotification = createNotification("0% • Starting...", 0)
+        startForeground(notificationId, initialNotification.build())
+        
+        val job = serviceScope.launch {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             
             try {
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val targetDir = File(downloadsDir, "VideoFetcher")
+                // SAFETY NET: Ensure engine is initialized before attempting download.
+                // This takes a few seconds on first launch, but is nearly instant on subsequent runs.
+                try {
+                    YoutubeDL.getInstance().init(applicationContext)
+                    FFmpeg.getInstance().init(applicationContext)
+                } catch (e: Exception) {
+                    throw Exception("Failed to initialize engine: ${e.message}")
+                }
+
+                val permissionManager = PermissionManager(applicationContext)
+                val customPath = permissionManager.getCustomDownloadFolderPath()
+                val targetDir = File(customPath)
                 if (!targetDir.exists()) targetDir.mkdirs()
 
-                // Ensure engines are initialized. If already installed, this skips instantly (~1ms).
-                YoutubeDL.getInstance().init(applicationContext)
-                FFmpeg.getInstance().init(applicationContext)
-
                 val request = YoutubeDLRequest(url)
-                val resolution = quality.replace("p", "")
-                val resolutionSignature = "(${resolution}p)"
+                
+                val targetHeight = when {
+                    quality == "4K" -> "2160"
+                    quality == "2K" -> "1440"
+                    quality == "Best Quality" -> "best"
+                    quality == "Best Quality (M4A)" -> "audio"
+                    quality.startsWith("Audio (MP3)") -> "audio"
+                    else -> quality.replace("p", "")
+                }
+                
+                val resolutionSignature = when {
+                    quality == "Best Quality" -> "(Best)"
+                    quality == "Best Quality (M4A)" -> "(M4A)"
+                    quality == "Audio (MP3) - High Quality" -> "(MP3_High)"
+                    quality == "Audio (MP3) - Standard" -> "(MP3_Std)"
+                    quality == "Audio (MP3) - Fast" -> "(MP3_Fast)"
+                    else -> "(${quality.replace(" ", "_")})"
+                }
 
-                request.addOption("-f", "bestvideo[height<=$resolution]+bestaudio/best")
-                request.addOption("--merge-output-format", "mp4")
+                if (quality == "Best Quality") {
+                    request.addOption("-f", "bestvideo+bestaudio/best")
+                } else if (quality == "Best Quality (M4A)") {
+                    request.addOption("-f", "bestaudio[ext=m4a]/bestaudio")
+                    request.addOption("--extract-audio")
+                    request.addOption("--audio-format", "m4a")
+                } else if (quality.startsWith("Audio (MP3)")) {
+                    request.addOption("-f", "bestaudio")
+                    request.addOption("--extract-audio")
+                    request.addOption("--audio-format", "mp3")
+                    when (quality) {
+                        "Audio (MP3) - High Quality" -> request.addOption("--audio-quality", "320K")
+                        "Audio (MP3) - Standard" -> request.addOption("--audio-quality", "192K")
+                        "Audio (MP3) - Fast" -> request.addOption("--audio-quality", "128K")
+                    }
+                } else {
+                    // Force H.264/AVC compatible codecs for Android gallery support, fallback to any if missing
+                    request.addOption("-f", "bestvideo[height<=$targetHeight][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=$targetHeight]+bestaudio/best")
+                }
+                
+                // Embed thumbnail directly into the file
+                request.addOption("--embed-thumbnail")
+                if (quality != "Best Quality (M4A)" && !quality.startsWith("Audio (MP3)")) {
+                    request.addOption("--merge-output-format", "mp4")
+                }
                 request.addOption("--restrict-filenames")
-                request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}.%(ext)s")
+                request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}_vdf.%(ext)s")
+                request.addOption("--concurrent-fragments", "4")
 
                 var lastUpdateTime = 0L
                 var lastProgress = -1f
 
-                YoutubeDL.getInstance().execute(request, "downloader_process") { progress, etaInSeconds, line ->
-                    if (isCancelled) return@execute
-                    
+                YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
+                    if (!isActive) {
+                        return@execute
+                    }
+
                     val isConverting = line.contains("[ffmpeg]") || line.contains("Merging") || progress >= 100f
                     val currentTime = System.currentTimeMillis()
 
@@ -91,31 +163,49 @@ class DownloadService : Service() {
                         val statusText = if (isConverting) {
                             "Converting & Merging... Please wait"
                         } else {
-                            "Downloading: ${String.format("%.1f", progress)}% (ETA: ${etaInSeconds}s)"
+                            "${String.format("%.1f", progress)}% • ETA: ${etaInSeconds}s"
                         }
 
+                        DownloadManager.updateDownloadState(url, DownloadState.Downloading(
+                            progress = if (isConverting) 1f else (progress / 100f),
+                            status = statusText
+                        ))
+
                         val notification = createNotification(statusText, progress.toInt())
-                        notificationManager.notify(NOTIFICATION_ID, notification.build())
+                        notificationManager.notify(notificationId, notification.build())
                     }
                 }
 
-                if (!isCancelled) {
+                if (isActive) {
+                    DownloadManager.updateDownloadState(url, DownloadState.Success("Video successfully saved!"))
+
                     val successNotification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
                         .setSmallIcon(android.R.drawable.stat_sys_download_done)
                         .setContentTitle("Video Downloaded")
-                        .setContentText("Successfully saved to Downloads/VideoFetcher")
+                        .setContentText("Successfully saved to ${targetDir.name}")
                         .build()
-                    notificationManager.notify(NOTIFICATION_ID + 1, successNotification)
+                    notificationManager.notify(notificationId + 1, successNotification)
+                    notificationManager.cancel(notificationId)
 
-                    // Find the newest file and trigger a media scan to make it visible in the gallery
-                    val newFile = targetDir.listFiles()?.maxByOrNull { it.lastModified() }
-                    if (newFile != null) {
-                        MediaScannerConnection.scanFile(applicationContext, arrayOf(newFile.absolutePath), null, null)
+                    // Scan recently modified files instead of just the single newest one to prevent race conditions in parallel downloads
+                    val recentFiles = targetDir.listFiles()?.filter { 
+                        System.currentTimeMillis() - it.lastModified() < 60000 // Modified in the last 60 seconds
+                    } ?: emptyList()
+                    
+                    val pathsToScan = recentFiles.map { it.absolutePath }.toTypedArray()
+                    if (pathsToScan.isNotEmpty()) {
+                        MediaScannerConnection.scanFile(applicationContext, pathsToScan, null) { _, _ ->
+                            DownloadManager.triggerFileRefresh()
+                        }
+                    } else {
+                        DownloadManager.triggerFileRefresh()
                     }
                 }
 
             } catch (e: Exception) {
-                if (!isCancelled && e.message?.contains("Process destroyed") != true) {
+                if (e.message?.contains("Process destroyed") == true || !isActive) {
+                    // Normal behavior when cancelled/paused
+                } else {
                     e.printStackTrace()
                     val rawError = e.message ?: ""
                     val friendlyMessage = when {
@@ -126,29 +216,72 @@ class DownloadService : Service() {
                         else -> "Couldn't download this video."
                     }
                     
-                    val errorNotification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
-                        .setSmallIcon(android.R.drawable.stat_notify_error)
-                        .setContentTitle("Download Failed")
-                        .setContentText(friendlyMessage)
-                        .setStyle(NotificationCompat.BigTextStyle().bigText(friendlyMessage))
-                        .build()
-                    notificationManager.notify(NOTIFICATION_ID + 2, errorNotification)
+                    DownloadManager.updateDownloadState(url, DownloadState.Error(friendlyMessage))
+                    notificationManager.cancel(notificationId)
                 }
             } finally {
-                @Suppress("DEPRECATION")
-                stopForeground(true)
-                stopSelf()
+                activeJobs.remove(url)
+                activeQualities.remove(url)
+                checkPendingQueue()
+                
+                if (activeJobs.isEmpty()) {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
             }
+        }
+        activeJobs[url] = job
+    }
+
+    private fun pauseDownload(url: String) {
+        serviceScope.launch {
+            val job = activeJobs.remove(url)
+            job?.cancel()
+            try {
+                YoutubeDL.getInstance().destroyProcessById("downloader_${url.hashCode()}")
+            } catch (e: Exception) { e.printStackTrace() }
+            
+            val lastState = DownloadManager.activeDownloads.value[url]
+            val progress = if (lastState is DownloadState.Downloading) lastState.progress * 100f else 0f
+            val quality = activeQualities.remove(url) ?: "1080p"
+            
+            PauseRepository(applicationContext).savePausedDownload(
+                PausedDownload(url, "Video", quality, progress)
+            )
+            DownloadManager.updateDownloadState(url, DownloadState.Cancelled)
+            DownloadManager.removeDownload(url)
+            checkPendingQueue()
         }
     }
 
-    private fun cancelDownload() {
-        isCancelled = true
+    private fun cancelDownload(url: String) {
         serviceScope.launch {
+            val pendingItem = pendingQueue.find { it.first == url }
+            if (pendingItem != null) {
+                pendingQueue.remove(pendingItem)
+                DownloadManager.removeDownload(url)
+                return@launch
+            }
+
+            val job = activeJobs.remove(url)
+            job?.cancel()
             try {
-                YoutubeDL.getInstance().destroyProcessById("downloader_process")
-            } catch (e: Exception) {
-                e.printStackTrace()
+                YoutubeDL.getInstance().destroyProcessById("downloader_${url.hashCode()}")
+            } catch (e: Exception) { e.printStackTrace() }
+            
+            DownloadManager.updateDownloadState(url, DownloadState.Cancelled)
+            PauseRepository(applicationContext).removePausedDownload(url)
+            checkPendingQueue()
+        }
+    }
+
+    private fun checkPendingQueue() {
+        if (activeJobs.size < maxParallelDownloads) {
+            if (pendingQueue.isNotEmpty()) {
+                val next = pendingQueue.removeAt(0)
+                startBackgroundDownload(next.first, next.second)
+            } else if (activeJobs.isEmpty()) {
+                stopSelf()
             }
         }
     }
@@ -156,9 +289,10 @@ class DownloadService : Service() {
     private fun createNotification(status: String, progress: Int): NotificationCompat.Builder {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("VideoFetcher")
+            .setContentTitle("Downloading Video...")
             .setContentText(status)
-            .setProgress(100, progress, progress == 0) // progress == 0 makes it an indeterminate loading bar initially
+            .setProgress(100, progress, false) // Solid progress bar right from 0%
+            .setColor(android.graphics.Color.parseColor("#2196F3")) // Standard Download Blue
             .setOngoing(true)
             .setOnlyAlertOnce(true)
     }

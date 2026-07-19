@@ -1,0 +1,6 @@
+local.properties
+build/
+.gradle
+manual.bat
+app/videofetcher.jks
+key.properties

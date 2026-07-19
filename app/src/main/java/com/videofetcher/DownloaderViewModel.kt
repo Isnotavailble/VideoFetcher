@@ -1,11 +1,15 @@
 package com.videofetcher
 
 import android.content.Context
+import android.content.ContentUris
+import android.content.Intent
 import android.graphics.Bitmap
 import android.media.MediaScannerConnection
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Environment
+import android.provider.MediaStore
+import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -13,179 +17,333 @@ import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 
+sealed class VideoInfoState {
+    object Idle : VideoInfoState()
+    object Fetching : VideoInfoState()
+    data class Success(
+        val title: String,
+        val duration: String,
+        val thumbnailUrl: String,
+        val formats: List<String>
+    ) : VideoInfoState()
+    data class Error(val message: String) : VideoInfoState()
+}
+
+sealed class EngineUpdateState {
+    object Idle : EngineUpdateState()
+    object Checking : EngineUpdateState()
+    object UpToDate : EngineUpdateState()
+    data class UpdateAvailable(val version: String) : EngineUpdateState()
+    object Updating : EngineUpdateState()
+    object Success : EngineUpdateState()
+    data class Error(val message: String) : EngineUpdateState()
+}
+
 class DownloaderViewModel : ViewModel() {
-    private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Initializing)
-    val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
+    val engineState: StateFlow<EngineState> = DownloadManager.engineState
+    val activeDownloads: StateFlow<Map<String, DownloadState>> = DownloadManager.activeDownloads
 
     private val _filesListState = MutableStateFlow<FilesListState>(FilesListState.Idle)
     val filesListState: StateFlow<FilesListState> = _filesListState.asStateFlow()
 
+    private val _pausedDownloads = MutableStateFlow<List<PausedDownload>>(emptyList())
+    val pausedDownloads: StateFlow<List<PausedDownload>> = _pausedDownloads.asStateFlow()
+
+    private val _videoInfoState = MutableStateFlow<VideoInfoState>(VideoInfoState.Idle)
+    val videoInfoState: StateFlow<VideoInfoState> = _videoInfoState.asStateFlow()
+
+    private val _engineUpdateState = MutableStateFlow<EngineUpdateState>(EngineUpdateState.Idle)
+    val engineUpdateState: StateFlow<EngineUpdateState> = _engineUpdateState.asStateFlow()
+
     private val baseDirName = "VideoFetcher"
+    private var fetchJob: Job? = null
+    private var analyzeJob: Job? = null
 
     fun initializeEngine(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 YoutubeDL.getInstance().init(context)
                 FFmpeg.getInstance().init(context)
-                _downloadState.value = DownloadState.Idle
+                if (DownloadManager.engineState.value is EngineState.Initializing) {
+                    DownloadManager.updateEngineState(EngineState.Idle)
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
-                _downloadState.value = DownloadState.Error("Engine failed to boot: ${e.message}")
+                DownloadManager.updateEngineState(EngineState.Error("Engine failed to boot: ${e.message}"))
             }
         }
     }
 
-    fun startDownload(url: String, quality: String, context: Context) {
+    fun checkForEngineUpdate(context: Context, forceCheck: Boolean = false) {
+        viewModelScope.launch {
+            if (forceCheck) {
+                _engineUpdateState.value = EngineUpdateState.Checking
+            }
+            
+            val manager = com.videofetcher.settings.EngineUpdateManager(context)
+            val currentVersion = YoutubeDL.getInstance().version(context)
+            val latestVersion = manager.fetchLatestVersion(forceCheck)
+
+            if (latestVersion != null && latestVersion != currentVersion) {
+                _engineUpdateState.value = EngineUpdateState.UpdateAvailable(latestVersion)
+            } else {
+                if (forceCheck) {
+                    _engineUpdateState.value = EngineUpdateState.UpToDate
+                } else {
+                    _engineUpdateState.value = EngineUpdateState.Idle
+                }
+            }
+        }
+    }
+
+    fun updateEngine(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _engineUpdateState.value = EngineUpdateState.Updating
+            try {
+                YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)
+                _engineUpdateState.value = EngineUpdateState.Success
+                // Reboot engine
+                YoutubeDL.getInstance().init(context)
+                FFmpeg.getInstance().init(context)
+                // Set to idle so the dialog goes away
+                delay(2000)
+                _engineUpdateState.value = EngineUpdateState.Idle
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _engineUpdateState.value = EngineUpdateState.Error("Failed to update: ${e.message}")
+            }
+        }
+    }
+
+    fun dismissUpdatePrompt(context: Context) {
+        com.videofetcher.settings.EngineUpdateManager(context).markUpdateSkippedForNow()
+        _engineUpdateState.value = EngineUpdateState.Idle
+    }
+
+    fun analyzeUrl(url: String) {
+        analyzeJob?.cancel()
         if (url.isBlank()) {
-            _downloadState.value = DownloadState.Error("URL cannot be empty")
+            _videoInfoState.value = VideoInfoState.Idle
             return
         }
 
-        _downloadState.value = DownloadState.Downloading(0f, "Starting...")
+        // Basic URL format validation before hitting the engine
+        val urlRegex = """^(https?|ftp)://[^\s/$.?#].[^\s]*$""".toRegex(RegexOption.IGNORE_CASE)
+        if (!urlRegex.matches(url)) {
+            _videoInfoState.value = VideoInfoState.Error("Invalid URL format")
+            return
+        }
 
-        viewModelScope.launch(Dispatchers.IO) {
+        analyzeJob = viewModelScope.launch(Dispatchers.IO) {
+            _videoInfoState.value = VideoInfoState.Fetching
             try {
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                
-                // Target: Downloads/VideoFetcher
-                val targetDir = File(downloadsDir, baseDirName)
-                if (!targetDir.exists()) {
-                    if (!targetDir.mkdirs()) {
-                        throw Exception("Could not create target directory: ${targetDir.absolutePath}")
-                    }
-                }
-
                 val request = YoutubeDLRequest(url)
-                val resolution = quality.replace("p", "")
                 
-                // This is the clean signature we add to the end: (1080p)
-                val resolutionSignature = "(${resolution}p)"
-
-                request.addOption("-f", "bestvideo[height<=$resolution]+bestaudio/best")
-                request.addOption("--merge-output-format", "mp4")
-                request.addOption("--restrict-filenames")
+                // 1. Aggressive Pruning (Ignore comments, subtitles, and playlists)
+                request.addOption("--no-playlist")
+                request.addOption("--no-write-subs")
+                request.addOption("--compat-options", "no-youtube-unavailable-videos")
                 
-                // Saves as: /path/Video_Title_(1080p).mp4 
-                request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}.%(ext)s")
+                // 2. Force IPv4 to prevent silent 10-second timeout hangs
+                request.addOption("--force-ipv4")
+                
+                val info = YoutubeDL.getInstance().getInfo(request)
+                
+                // Resolution Bucketing (handles vertical videos securely)
+                val rawMaxHeight = info.formats
+                    ?.filter { it.height > 0 && it.vcodec != "none" }
+                    ?.maxOfOrNull { Math.min(it.width.coerceAtLeast(0), it.height) } ?: 0
 
-                var lastUpdateTime = 0L
-                var lastProgress = -1f
+                val formats = mutableListOf<String>()
+                when {
+                    rawMaxHeight >= 2160 -> formats.addAll(listOf("4K", "2K", "1080p", "720p", "480p"))
+                    rawMaxHeight >= 1440 -> formats.addAll(listOf("2K", "1080p", "720p", "480p"))
+                    rawMaxHeight >= 1000 -> formats.addAll(listOf("1080p", "720p", "480p", "360p"))
+                    rawMaxHeight >= 720 -> formats.addAll(listOf("720p", "480p", "360p"))
+                    rawMaxHeight >= 480 -> formats.addAll(listOf("480p", "360p"))
+                    rawMaxHeight > 0 -> formats.add("360p")
+                    else -> formats.add("Best Quality")
+                }
+                formats.add("Best Quality (M4A)")
+                formats.add("Audio (MP3) - High Quality")
+                formats.add("Audio (MP3) - Standard")
+                formats.add("Audio (MP3) - Fast")
+                val durationStr = formatDuration((info.duration * 1000).toLong())
+                
+                withContext(Dispatchers.Main) {
+                    _videoInfoState.value = VideoInfoState.Success(
+                        title = info.title ?: "Unknown Title",
+                        duration = durationStr,
+                        thumbnailUrl = info.thumbnail ?: "",
+                        formats = formats
+                    )
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                withContext(Dispatchers.Main) { _videoInfoState.value = VideoInfoState.Error("Couldn't fetch video info. Is the link correct?") }
+            }
+        }
+    }
 
-                YoutubeDL.getInstance().execute(request, "downloader_process") { progress, etaInSeconds, line ->
-                    val isConverting = line.contains("[ffmpeg]") || line.contains("Merging") || progress >= 100f
-                    val currentTime = System.currentTimeMillis()
+    fun clearVideoInfo() {
+        analyzeJob?.cancel()
+        _videoInfoState.value = VideoInfoState.Idle
+    }
 
-                    // Throttle updates: Only update if converting, finished, or 300ms have passed with new progress
-                    if (isConverting || progress >= 100f || (currentTime - lastUpdateTime > 300 && progress != lastProgress)) {
-                        lastUpdateTime = currentTime
-                        lastProgress = progress
+    fun startDownload(url: String, quality: String, context: Context) {
+        if (url.isBlank()) return
 
-                        val currentStatus = if (isConverting) {
-                            "Converting & Merging to MP4... Please wait"
-                        } else {
-                            "Downloading: ${String.format("%.1f", progress)}% (ETA: ${etaInSeconds}s)"
+        val serviceIntent = Intent(context, DownloadService::class.java).apply {
+            action = "START_DOWNLOAD"
+            putExtra("URL", url)
+            putExtra("QUALITY", quality)
+        }
+        context.startService(serviceIntent)
+    }
+
+    fun pauseDownload(context: Context, url: String) {
+        val intent = Intent(context, DownloadService::class.java).apply { 
+            action = "PAUSE_DOWNLOAD" 
+            putExtra("URL", url)
+        }
+        context.startService(intent)
+    }
+
+    fun cancelDownload(context: Context, url: String) {
+        val intent = Intent(context, DownloadService::class.java).apply {
+            action = "CANCEL_DOWNLOAD"
+            putExtra("URL", url)
+        }
+        context.startService(intent)
+    }
+
+    fun fetchPausedDownloads(context: Context) {
+        _pausedDownloads.value = PauseRepository(context).getAllPausedDownloads()
+    }
+
+    fun resumeDownload(context: Context, url: String, quality: String) {
+        PauseRepository(context).removePausedDownload(url)
+        fetchPausedDownloads(context)
+        startDownload(url, quality, context)
+    }
+
+    fun cancelPausedDownload(context: Context, url: String) {
+        PauseRepository(context).removePausedDownload(url)
+        fetchPausedDownloads(context)
+    }
+
+    fun fetchDownloadedFiles(context: Context?): Job? {
+        fetchJob?.cancel()
+        fetchJob = viewModelScope.launch(Dispatchers.IO) {
+            if (_filesListState.value !is FilesListState.Success) {
+                _filesListState.value = FilesListState.Fetching
+            }
+            try {
+                if (context == null) return@launch
+                val permissionManager = PermissionManager(context)
+                val customPath = permissionManager.getCustomDownloadFolderPath()
+                val targetDir = File(customPath)
+
+                // Leverage MediaStore for lightning-fast querying of the custom folder
+                val fileSet = mutableSetOf<String>()
+                val filesList = mutableListOf<File>()
+                
+                try {
+                    val projection = arrayOf(MediaStore.MediaColumns.DATA)
+                    val selection = "${MediaStore.MediaColumns.DATA} LIKE ?"
+                    val sortOrder = "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
+
+                    // Query MediaStore for ALL _vdf files
+                    val mediaUris = listOf(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, MediaStore.Files.getContentUri("external"))
+                    for (uri in mediaUris) {
+                        context.contentResolver.query(uri, projection, selection, arrayOf("$customPath/%_vdf.%"), sortOrder)?.use { cursor ->
+                            val dataCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
+                            while (cursor.moveToNext()) {
+                                val path = cursor.getString(dataCol)
+                                val file = File(path)
+                                if (file.exists() && fileSet.add(path)) {
+                                    filesList.add(file)
+                                }
+                            }
                         }
-
-                        _downloadState.value = DownloadState.Downloading(
-                            progress = if (isConverting) 1f else (progress / 100f),
-                            status = currentStatus
-                        )
-                    }
-                }
-
-                // Check if it was manually cancelled
-                if (_downloadState.value !is DownloadState.Cancelled) {
-                    _downloadState.value = DownloadState.Success("Video successfully saved!")
-
-                    // Find the newest file in the directory (the one we just downloaded)
-                    val newFile = targetDir.listFiles()?.maxByOrNull { it.lastModified() }
-                    if (newFile != null) {
-                        // Trigger a media scan to make the video appear in the gallery immediately
-                        MediaScannerConnection.scanFile(context, arrayOf(newFile.absolutePath), null, null)
                     }
 
-                    fetchDownloadedFiles(context)
+
+                } catch (e: Exception) { e.printStackTrace() }
+
+                // Fallback: Ensure we don't miss new files not yet scanned by MediaStore
+                val fileRegex = Regex(".*_vdf\\.[^.]+$", RegexOption.IGNORE_CASE)
+                val directFiles = targetDir.listFiles { file ->
+                    file.isFile && file.name.matches(fileRegex) && fileSet.add(file.absolutePath)
                 }
-				
                 
-            } catch (e: Exception) {
-                // 1. If the user clicked Cancel, ignore the resulting crash
-                if (_downloadState.value is DownloadState.Cancelled || e.message?.contains("Process destroyed") == true) {
-                    _downloadState.value = DownloadState.Cancelled
-                    return@launch
+                if (directFiles != null) {
+                    filesList.addAll(directFiles.sortedByDescending { f -> f.lastModified() })
                 }
 
-                // Log the real, ugly error to the console just in case you need to debug it later
-                e.printStackTrace()
-
-                // 2. Smart Error Mapper: Translate raw terminal errors into friendly UI messages
-                val rawError = e.message ?: ""
-                val friendlyMessage = when {
-                    rawError.contains("is not a valid URL", ignoreCase = true) -> "The link provided is not a valid video URL."
-                    rawError.contains("Unsupported URL", ignoreCase = true) -> "We don't support downloading from this website yet."
-                    rawError.contains("Sign in", ignoreCase = true) || rawError.contains("login", ignoreCase = true) -> "Login required. Tip: Don't copy-paste the link. Instead, use the 'Share with this app' button and choose VideoFetcher!"
-                    rawError.contains("Not Found", ignoreCase = true) || rawError.contains("404", ignoreCase = true) -> "Video not found. The link might be broken or private."
-                    else -> "Couldn't download this video. Please check the link and try again."
-                }
-
-                _downloadState.value = DownloadState.Error(friendlyMessage)
-            }
-        }
-    }
-
-    fun cancelDownload() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                YoutubeDL.getInstance().destroyProcessById("downloader_process")
-                _downloadState.value = DownloadState.Cancelled
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    fun fetchDownloadedFiles(context: Context?) {
-        _filesListState.value = FilesListState.Fetching
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val targetDir = File(downloadsDir, baseDirName)
+                // SAF Fallback: If app was reinstalled, Scoped Storage blocks listFiles() on old files.
+                // We must read the actual directory using the SAF tree URI.
+                val possibleUris = listOfNotNull(
+                    permissionManager.getSavedFolderUri(),
+                    permissionManager.getCustomDownloadFolderUri()
+                )
                 
-                if (!targetDir.exists()) {
-                    _filesListState.value = FilesListState.Success(emptyList())
-                    return@launch
+                for (treeUri in possibleUris) {
+                    try {
+                        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+                        context.contentResolver.query(childrenUri, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
+                            val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                            while (cursor.moveToNext()) {
+                                val name = cursor.getString(nameCol)
+                                if (name != null && name.matches(fileRegex)) {
+                                    val file = File(targetDir, name)
+                                    if (fileSet.add(file.absolutePath)) {
+                                        filesList.add(file)
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
+                
+                val files = filesList.toTypedArray()
 
-                val files = targetDir.listFiles { file ->
-                    file.isFile && file.name.endsWith(".mp4", ignoreCase = true)
-                } ?: emptyArray()
-
-                val thumbCacheDir = File(context?.cacheDir, "thumbnails")
+                val thumbCacheDir = File(context.cacheDir, "thumbnails")
                 if (!thumbCacheDir.exists()) {
                     thumbCacheDir.mkdirs()
                 }
 
+                // Grab existing loaded files to prevent overwriting them with placeholders
+                val currentSuccessState = _filesListState.value as? FilesListState.Success
+                val existingFilesMap = currentSuccessState?.files?.associateBy { it.path } ?: emptyMap()
+
                 // STEP 1: Fast load - Instantly show files without waiting for heavy extraction
                 val initialList = files.map { file ->
-                    val (title, signature) = parseFileName(file.name)
-                    val thumbFile = File(thumbCacheDir, "${file.name}.png")
-                    DownloadedFileDetails(
-                        title = title,
-                        path = file.absolutePath,
-                        signature = signature,
-                        size = formatFileSize(file.length()),
-                        duration = "--:--", // Placeholder, will be updated lazily
-                        thumbnailUri = if (thumbFile.exists()) Uri.fromFile(thumbFile) else Uri.EMPTY
-                    )
+                    existingFilesMap[file.absolutePath] ?: run {
+                        val (title, signature) = parseFileName(file.name)
+                        val thumbFile = File(thumbCacheDir, "${file.name}.png")
+                        DownloadedFileDetails(
+                            title = title,
+                            path = file.absolutePath,
+                            signature = signature,
+                            size = formatFileSize(file.length()),
+                            duration = "--:--", // Placeholder, will be updated lazily
+                            thumbnailUri = if (thumbFile.exists()) Uri.fromFile(thumbFile) else Uri.EMPTY
+                        )
+                    }
                 }.toMutableList()
 
                 // Immediately update UI with names and sizes
@@ -193,6 +351,11 @@ class DownloaderViewModel : ViewModel() {
 
                 // STEP 2: Lazy processing - Fetch durations and missing thumbnails in background
                 for (i in files.indices) {
+                    // Skip expensive processing if we already have a valid duration and thumbnail!
+                    if (initialList[i].duration != "--:--" && initialList[i].thumbnailUri != Uri.EMPTY) {
+                        continue
+                    }
+
                     val file = files[i]
                     val thumbFile = File(thumbCacheDir, "${file.name}.png")
                     var updatedUri = initialList[i].thumbnailUri
@@ -204,8 +367,21 @@ class DownloaderViewModel : ViewModel() {
                         var attempts = 0
                         while (!fileReadable && attempts < 10) {
                             try {
-                                FileInputStream(file).use { fis -> retriever.setDataSource(fis.fd) }
-                                fileReadable = true
+                                val ext = file.extension.lowercase()
+                                val mimeType = if (ext in listOf("mp3", "m4a")) "audio/*" else "video/*"
+                                val uri = getFileUri(context, file.absolutePath, mimeType)
+                                
+                                if (uri != null) {
+                                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                                        retriever.setDataSource(pfd.fileDescriptor)
+                                        fileReadable = true
+                                    }
+                                }
+                                
+                                if (!fileReadable) {
+                                    retriever.setDataSource(file.absolutePath)
+                                    fileReadable = true
+                                }
                             } catch (e: Exception) {
                                 attempts++
                                 if (attempts < 10) delay(500)
@@ -243,10 +419,14 @@ class DownloaderViewModel : ViewModel() {
                     delay(50)
                 }
             } catch (e: Exception) {
+                // Ignore Coroutine cancellations so they don't trigger the Error UI
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                
                 e.printStackTrace()
                 _filesListState.value = FilesListState.Error("Failed to scan directory: ${e.message}")
             }
         }
+        return fetchJob
     }
     
     // PARSING LOGIC: Extracts clean title and (Resolution)
@@ -256,14 +436,19 @@ class DownloaderViewModel : ViewModel() {
         
         val nameWithoutExt = fileName.substring(0, lastIndex)
         
-        val signatureRegex = """(.*)[\s_](\(\d+p?\))""".toRegex()
-        val matchResult = signatureRegex.find(nameWithoutExt)
+        var cleanName = nameWithoutExt
+        if (cleanName.endsWith("_vdf", ignoreCase = true)) {
+            cleanName = cleanName.substring(0, cleanName.length - 4)
+        }
+
+        val signatureRegex = """(.*)[\s_](\([^)]+\))$""".toRegex()
+        val matchResult = signatureRegex.find(cleanName)
         
         return if (matchResult != null) {
             val (title, signature) = matchResult.destructured
             title.replace("_", " ") to signature
         } else {
-            nameWithoutExt.replace("_", " ") to "(MP4)"
+            cleanName.replace("_", " ") to "(${fileName.substring(lastIndex + 1).uppercase()})"
         }
     }
 
@@ -285,7 +470,225 @@ class DownloaderViewModel : ViewModel() {
         }
     }
 
-    fun resetState() {
-        _downloadState.value = DownloadState.Idle
+    private fun getFileUri(context: Context, absolutePath: String, mimeType: String): Uri? {
+        val file = File(absolutePath)
+        
+        // 1. Try MediaStore
+        try {
+            val baseUri = if (mimeType.startsWith("audio")) MediaStore.Audio.Media.EXTERNAL_CONTENT_URI else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            val projection = arrayOf(MediaStore.Files.FileColumns._ID)
+            val selection = "${MediaStore.Files.FileColumns.DATA} = ?"
+            val selectionArgs = arrayOf(absolutePath)
+            
+            context.contentResolver.query(baseUri, projection, selection, selectionArgs, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID))
+                    return ContentUris.withAppendedId(baseUri, id)
+                }
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+
+        // 2. Try SAF
+        try {
+            val permissionManager = PermissionManager(context)
+            val possibleUris = listOfNotNull(permissionManager.getSavedFolderUri(), permissionManager.getCustomDownloadFolderUri())
+            for (treeUri in possibleUris) {
+                val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+                context.contentResolver.query(childrenUri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
+                    val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    while (cursor.moveToNext()) {
+                        if (cursor.getString(nameCol) == file.name) {
+                            return DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(idCol))
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+        
+        // 3. Try FileProvider if file is readable directly
+        if (file.exists()) {
+            try {
+                return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+        
+        return null
+    }
+
+    fun playVideo(context: Context, fileDetails: DownloadedFileDetails) {
+        try {
+            val file = File(fileDetails.path)
+            val ext = file.extension.lowercase()
+            val mimeType = if (ext in listOf("mp3", "m4a")) "audio/*" else "video/*"
+            
+            val uri = getFileUri(context, fileDetails.path, mimeType)
+            if (uri == null) {
+                android.widget.Toast.makeText(context, "Cannot access file. Try resetting download folder.", android.widget.Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "Play with..."))
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun shareVideo(context: Context, fileDetails: DownloadedFileDetails) {
+        try {
+            val file = File(fileDetails.path)
+            val ext = file.extension.lowercase()
+            val mimeType = when (ext) {
+                "mp3" -> "audio/mpeg"
+                "m4a" -> "audio/mp4"
+                else -> "video/mp4"
+            }
+            
+            val uri = getFileUri(context, fileDetails.path, mimeType)
+            if (uri == null) {
+                android.widget.Toast.makeText(context, "Cannot access file.", android.widget.Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = mimeType
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "Share..."))
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun clearThumbnailCache(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val thumbCacheDir = File(context.cacheDir, "thumbnails")
+                if (thumbCacheDir.exists() && thumbCacheDir.isDirectory) {
+                    thumbCacheDir.listFiles()?.forEach { it.delete() }
+                }
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Thumbnail cache cleared", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun resetState(url: String) {
+        DownloadManager.removeDownload(url)
+    }
+
+    fun deleteVideo(
+        context: Context,
+        fileDetails: DownloadedFileDetails,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit,
+        onPermissionRequired: () -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val file = File(fileDetails.path)
+                
+                // 1. Physically delete the file directly (Works because your app created it)
+                var isDeleted = if (file.exists()) file.delete() else true
+
+                // 2. Fallback to SAF if normal delete failed (due to Scoped Storage + reinstall)
+                if (!isDeleted && file.exists()) {
+                    val permissionManager = PermissionManager(context)
+
+                    // Use either the dedicated delete permission URI or the general custom folder URI
+                    val possibleUris = listOfNotNull(
+                        permissionManager.getSavedFolderUri(),
+                        permissionManager.getCustomDownloadFolderUri()
+                    )
+
+                    for (treeUri in possibleUris) {
+                        try {
+                            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+                            var targetDocUri: Uri? = null
+
+                            // Find the specific file inside the granted folder tree
+                            context.contentResolver.query(childrenUri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
+                                val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                                val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                                while (cursor.moveToNext()) {
+                                    if (cursor.getString(nameCol) == file.name) {
+                                        targetDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(idCol))
+                                        break
+                                    }
+                                }
+                            }
+                            if (targetDocUri != null) {
+                                isDeleted = DocumentsContract.deleteDocument(context.contentResolver, targetDocUri!!)
+                                if (isDeleted) break
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+
+                    if (!isDeleted) {
+                        // We don't have permission yet, ask the UI to request it
+                        withContext(Dispatchers.Main) { onPermissionRequired() }
+                        return@launch
+                    }
+                }
+
+                if (isDeleted) {
+                    // 3. Silently clear the MediaStore index to prevent broken "ghosts" in the Gallery.
+                    // We catch and ignore SecurityExceptions here to guarantee NO system popups appear.
+                    try {
+                        var uri: Uri? = null
+                        val projection = arrayOf(MediaStore.Video.Media._ID)
+                        val selection = "${MediaStore.Video.Media.DATA} = ?"
+                        val selectionArgs = arrayOf(fileDetails.path)
+                        val queryUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+
+                        context.contentResolver.query(queryUri, projection, selection, selectionArgs, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+                                val id = cursor.getLong(idColumn)
+                                uri = ContentUris.withAppendedId(queryUri, id)
+                            }
+                        }
+                        uri?.let { context.contentResolver.delete(it, null, null) }
+                    } catch (e: Exception) {
+                        // Suppressed intentionally. The physical file is already gone.
+                    }
+
+                    // 3. Clean up the app UI instantly
+                    cleanupDeletedFile(context, fileDetails)
+                    withContext(Dispatchers.Main) { onSuccess() }
+                } else {
+                    withContext(Dispatchers.Main) { onError("Cannot delete file. Storage access denied.") }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                e.printStackTrace()
+                withContext(Dispatchers.Main) { onError(e.message ?: "Unknown error occurred.") }
+            }
+        }
+    }
+
+    private fun cleanupDeletedFile(context: Context, fileDetails: DownloadedFileDetails) {
+        val file = File(fileDetails.path)
+        if (file.exists()) file.delete()
+        
+        val thumbFile = File(context.cacheDir, "thumbnails/${file.name}.png")
+        if (thumbFile.exists()) thumbFile.delete()
+
+        // Instantly remove from UI State so the user sees it disappear immediately
+        val currentState = _filesListState.value
+        if (currentState is FilesListState.Success) {
+            val updatedList = currentState.files.filter { it.path != fileDetails.path }
+            _filesListState.value = FilesListState.Success(updatedList)
+        }
     }
 }

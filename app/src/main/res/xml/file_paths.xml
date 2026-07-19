@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- This allows the app to securely share files from anywhere in the external storage.
+         This is future-proof for when users can select a custom download folder. -->
+    <external-path name="external_files" path="." />
+</paths>

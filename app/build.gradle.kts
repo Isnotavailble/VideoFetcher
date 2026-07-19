@@ -1,6 +1,15 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+val keyPropertiesFile = rootProject.file("key.properties")
+val keyProperties = Properties()
+if (keyPropertiesFile.exists()) {
+    keyProperties.load(FileInputStream(keyPropertiesFile))
 }
 
 android {
@@ -23,6 +32,28 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        create("release") {
+            if (keyPropertiesFile.exists()) {
+                storeFile = file(keyProperties.getProperty("storeFile"))
+                storePassword = keyProperties.getProperty("storePassword")
+                keyAlias = keyProperties.getProperty("keyAlias")
+                keyPassword = keyProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            isDebuggable = true
+        }
+        release {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
     // =========================================================
     // NEW: ABI Splitting (Reduces APK size from ~200MB to ~50MB)
     // =========================================================
@@ -31,7 +62,7 @@ android {
             isEnable = true
             reset()
             // Build for both 32-bit and 64-bit ARM CPUs (armeabi-v7a and arm64-v8a)
-            include("armeabi-v7a")
+            include("arm64-v8a","armeabi-v7a")
             isUniversalApk = false // Prevents the creation of the massive 200MB file
         }
     }
@@ -42,6 +73,14 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            
+            // Tells Gradle not to attempt to strip debug symbols from these disguised ZIP files
+            keepDebugSymbols.add("**/libffmpeg.so")
+            keepDebugSymbols.add("**/libffmpeg.zip.so")
+            keepDebugSymbols.add("**/libffprobe.so")
+            keepDebugSymbols.add("**/libpython.so")
+            keepDebugSymbols.add("**/libpython.zip.so")
+            keepDebugSymbols.add("**/libqjs.so")
         }
     }
 
@@ -55,9 +94,10 @@ android {
 }
 
 dependencies {
-    implementation(platform("androidx.compose:compose-bom:2023.10.01"))
+    implementation(platform("androidx.compose:compose-bom:2024.02.01"))
     implementation("androidx.activity:activity-compose:1.8.2")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.ui:ui")
     
     // =========================================================
@@ -65,6 +105,7 @@ dependencies {
     // =========================================================
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("io.coil-kt:coil-compose:2.6.0")
+    implementation("androidx.datastore:datastore-preferences:1.0.0")
     
     // YoutubeDL and FFmpeg dependencies
     implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
