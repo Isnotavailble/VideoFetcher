@@ -108,6 +108,11 @@ class QuickDownloadActivity : ComponentActivity() {
                 val isResolutionSelectionEnabled = remember { permissionManager.isResolutionSelectionEnabled() }
                 val viewModel: DownloaderViewModel = viewModel()
                 val videoInfoState by viewModel.videoInfoState.collectAsState()
+                val engineUpdateState by viewModel.engineUpdateState.collectAsState()
+
+                LaunchedEffect(Unit) {
+                    viewModel.checkForEngineUpdate(context.applicationContext)
+                }
 
                 // Automatically trigger the background fetch if the user has the setting enabled
                 LaunchedEffect(sharedUrl) {
@@ -488,6 +493,8 @@ class QuickDownloadActivity : ComponentActivity() {
                         Spacer(modifier = Modifier.height(24.dp))
                     }
                 }
+                
+                EngineUpdateDialog(engineUpdateState, viewModel, context)
             }
         }
     }

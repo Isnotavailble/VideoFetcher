@@ -83,6 +83,7 @@ fun VideoDownloaderUI(
     val videoInfoState by viewModel.videoInfoState.collectAsState()
     val filesListState by viewModel.filesListState.collectAsState()
     val pausedDownloads by viewModel.pausedDownloads.collectAsState()
+    val engineUpdateState by viewModel.engineUpdateState.collectAsState()
 
     var currentTab by remember { mutableStateOf(AppTab.HOME) }
     
@@ -92,10 +93,15 @@ fun VideoDownloaderUI(
     // Only refresh when the number of items or successes changes, avoiding progress-tick loops
     val successCount = activeDownloads.values.count { it is DownloadState.Success }
     val activeCount = activeDownloads.size
+    val refreshCounter by DownloadManager.fileRefreshCounter.collectAsState()
     
-    LaunchedEffect(successCount, activeCount) {
+    LaunchedEffect(successCount, activeCount, refreshCounter) {
         viewModel.fetchPausedDownloads(context.applicationContext)
         viewModel.fetchDownloadedFiles(context.applicationContext)
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.checkForEngineUpdate(context.applicationContext)
     }
 
     // Update URL field automatically when intent brings a new link
@@ -283,6 +289,8 @@ fun VideoDownloaderUI(
             }
         }
     }
+    
+    EngineUpdateDialog(engineUpdateState, viewModel, context)
     }
 }
 
@@ -1032,6 +1040,30 @@ fun SettingsContent(
         }
         
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
+
+        Text("Engine Version", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Filled.Settings, contentDescription = "Engine", tint = MaterialTheme.colorScheme.onSurface)
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                val currentVersion = try { com.yausername.youtubedl_android.YoutubeDL.getInstance().version(context) } catch(e: Exception) { "Unknown" }
+                Text("yt-dlp Engine", color = MaterialTheme.colorScheme.onSurface)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Version: $currentVersion", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Button(
+                onClick = { viewModel.checkForEngineUpdate(context, forceCheck = true) }, 
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+            ) { Text("Check", fontWeight = FontWeight.Bold) }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
         
         Text("Storage & Cache", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
         Spacer(modifier = Modifier.height(8.dp))
@@ -1574,5 +1606,91 @@ fun ErrorCard(message: String) {
                 Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
             }
         }
+    }
+}
+
+@Composable
+fun EngineUpdateDialog(
+    state: EngineUpdateState,
+    viewModel: DownloaderViewModel,
+    context: android.content.Context
+) {
+    when (state) {
+        is EngineUpdateState.Checking -> {
+            AlertDialog(
+                onDismissRequest = { },
+                title = { Text("Checking for updates...") },
+                text = { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) },
+                confirmButton = { }
+            )
+        }
+        is EngineUpdateState.UpToDate -> {
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissUpdatePrompt(context) },
+                title = { Text("Up to Date") },
+                text = { Text("Your download engine is already on the latest version.") },
+                confirmButton = {
+                    Button(onClick = { viewModel.dismissUpdatePrompt(context) }) {
+                        Text("OK")
+                    }
+                }
+            )
+        }
+        is EngineUpdateState.UpdateAvailable -> {
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissUpdatePrompt(context) },
+                title = { Text("Engine Update Available") },
+                text = { Text("A new version of the download engine (${state.version}) is available. Would you like to update now?") },
+                confirmButton = {
+                    Button(onClick = { viewModel.updateEngine(context) }) {
+                        Text("Update")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.dismissUpdatePrompt(context) }) {
+                        Text("Later")
+                    }
+                }
+            )
+        }
+        is EngineUpdateState.Updating -> {
+            AlertDialog(
+                onDismissRequest = { },
+                title = { Text("Updating Engine...") },
+                text = { 
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Please do not close the app.")
+                    }
+                },
+                confirmButton = { }
+            )
+        }
+        is EngineUpdateState.Success -> {
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissUpdatePrompt(context) },
+                title = { Text("Update Successful") },
+                text = { Text("The engine was updated and rebooted successfully.") },
+                confirmButton = {
+                    Button(onClick = { viewModel.dismissUpdatePrompt(context) }) {
+                        Text("OK")
+                    }
+                }
+            )
+        }
+        is EngineUpdateState.Error -> {
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissUpdatePrompt(context) },
+                title = { Text("Update Failed") },
+                text = { Text(state.message) },
+                confirmButton = {
+                    Button(onClick = { viewModel.dismissUpdatePrompt(context) }) {
+                        Text("Close")
+                    }
+                }
+            )
+        }
+        else -> {}
     }
 }

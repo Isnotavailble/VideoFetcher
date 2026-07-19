@@ -27,4 +27,11 @@ object DownloadManager {
         current.remove(url)
         _activeDownloads.value = current
     }
+
+    private val _fileRefreshCounter = MutableStateFlow(0)
+    val fileRefreshCounter: StateFlow<Int> = _fileRefreshCounter.asStateFlow()
+
+    fun triggerFileRefresh() {
+        _fileRefreshCounter.value += 1
+    }
 }

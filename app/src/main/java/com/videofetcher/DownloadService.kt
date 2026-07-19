@@ -194,7 +194,11 @@ class DownloadService : Service() {
                     
                     val pathsToScan = recentFiles.map { it.absolutePath }.toTypedArray()
                     if (pathsToScan.isNotEmpty()) {
-                        MediaScannerConnection.scanFile(applicationContext, pathsToScan, null, null)
+                        MediaScannerConnection.scanFile(applicationContext, pathsToScan, null) { _, _ ->
+                            DownloadManager.triggerFileRefresh()
+                        }
+                    } else {
+                        DownloadManager.triggerFileRefresh()
                     }
                 }
 

@@ -40,6 +40,16 @@ sealed class VideoInfoState {
     data class Error(val message: String) : VideoInfoState()
 }
 
+sealed class EngineUpdateState {
+    object Idle : EngineUpdateState()
+    object Checking : EngineUpdateState()
+    object UpToDate : EngineUpdateState()
+    data class UpdateAvailable(val version: String) : EngineUpdateState()
+    object Updating : EngineUpdateState()
+    object Success : EngineUpdateState()
+    data class Error(val message: String) : EngineUpdateState()
+}
+
 class DownloaderViewModel : ViewModel() {
     val engineState: StateFlow<EngineState> = DownloadManager.engineState
     val activeDownloads: StateFlow<Map<String, DownloadState>> = DownloadManager.activeDownloads
@@ -52,6 +62,9 @@ class DownloaderViewModel : ViewModel() {
 
     private val _videoInfoState = MutableStateFlow<VideoInfoState>(VideoInfoState.Idle)
     val videoInfoState: StateFlow<VideoInfoState> = _videoInfoState.asStateFlow()
+
+    private val _engineUpdateState = MutableStateFlow<EngineUpdateState>(EngineUpdateState.Idle)
+    val engineUpdateState: StateFlow<EngineUpdateState> = _engineUpdateState.asStateFlow()
 
     private val baseDirName = "VideoFetcher"
     private var fetchJob: Job? = null
@@ -70,6 +83,52 @@ class DownloaderViewModel : ViewModel() {
                 DownloadManager.updateEngineState(EngineState.Error("Engine failed to boot: ${e.message}"))
             }
         }
+    }
+
+    fun checkForEngineUpdate(context: Context, forceCheck: Boolean = false) {
+        viewModelScope.launch {
+            if (forceCheck) {
+                _engineUpdateState.value = EngineUpdateState.Checking
+            }
+            
+            val manager = com.videofetcher.settings.EngineUpdateManager(context)
+            val currentVersion = YoutubeDL.getInstance().version(context)
+            val latestVersion = manager.fetchLatestVersion(forceCheck)
+
+            if (latestVersion != null && latestVersion != currentVersion) {
+                _engineUpdateState.value = EngineUpdateState.UpdateAvailable(latestVersion)
+            } else {
+                if (forceCheck) {
+                    _engineUpdateState.value = EngineUpdateState.UpToDate
+                } else {
+                    _engineUpdateState.value = EngineUpdateState.Idle
+                }
+            }
+        }
+    }
+
+    fun updateEngine(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _engineUpdateState.value = EngineUpdateState.Updating
+            try {
+                YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)
+                _engineUpdateState.value = EngineUpdateState.Success
+                // Reboot engine
+                YoutubeDL.getInstance().init(context)
+                FFmpeg.getInstance().init(context)
+                // Set to idle so the dialog goes away
+                delay(2000)
+                _engineUpdateState.value = EngineUpdateState.Idle
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _engineUpdateState.value = EngineUpdateState.Error("Failed to update: ${e.message}")
+            }
+        }
+    }
+
+    fun dismissUpdatePrompt(context: Context) {
+        com.videofetcher.settings.EngineUpdateManager(context).markUpdateSkippedForNow()
+        _engineUpdateState.value = EngineUpdateState.Idle
     }
 
     fun analyzeUrl(url: String) {
