@@ -29,7 +29,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo $KEYSTORE_BASE64 | base64 -d > videofetcher.jks
+          echo "$KEYSTORE_BASE64" | tr -d '\n\r ' | base64 -d > videofetcher.jks
           echo "storeFile=../videofetcher.jks" > key.properties
           echo "storePassword=$KEYSTORE_PASSWORD" >> key.properties
           echo "keyAlias=$KEY_ALIAS" >> key.properties
