@@ -8,6 +8,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import com.videofetcher.cookies.LoginPlatform
+import com.videofetcher.cookies.NetscapeCookieWriter
+import com.videofetcher.cookies.PlatformLoginScreen
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -194,9 +197,17 @@ fun VideoDownloaderUI(
     val isReady = engineState is EngineState.Idle
 
     var showAboutScreen by remember { mutableStateOf(false) }
+    var activeLoginPlatform by remember { mutableStateOf<LoginPlatform?>(null) }
+    var cookieRefreshTrigger by remember { mutableStateOf(0) }
 
     if (showAboutScreen) {
         AboutScreen(onBack = { showAboutScreen = false })
+    } else if (activeLoginPlatform != null) {
+        PlatformLoginScreen(
+            platform = activeLoginPlatform!!,
+            onBack = { activeLoginPlatform = null },
+            onCookiesSaved = { cookieRefreshTrigger++ }
+        )
     } else {
     Scaffold(
         bottomBar = {
@@ -275,16 +286,18 @@ fun VideoDownloaderUI(
                 )
                 AppTab.FILES -> FilesContent(pausedDownloads, filesListState, viewModel, context, hasStoragePermission, requestStoragePermission)
                 AppTab.SETTINGS -> SettingsContent(
-                    isDarkTheme = isDarkTheme, 
-                    onThemeToggle = onThemeToggle, 
+                    isDarkTheme = isDarkTheme,
+                    onThemeToggle = onThemeToggle,
                     isResolutionSelectionEnabled = isResolutionSelectionEnabled,
                     onResolutionSelectionChange = { 
                         permissionManager.setResolutionSelectionEnabled(it)
                         isResolutionSelectionEnabled = it
                     },
-                    viewModel = viewModel, 
+                    viewModel = viewModel,
                     context = context,
-                    onAboutClick = { showAboutScreen = true }
+                    onAboutClick = { showAboutScreen = true },
+                    onPlatformClick = { activeLoginPlatform = it },
+                    cookieRefreshTrigger = cookieRefreshTrigger
                 )
             }
         }
@@ -622,7 +635,7 @@ fun HomeContent(
         Button(
             onClick = {
                 if (isResolutionSelectionEnabled && needsAnalysis) {
-                    viewModel.analyzeUrl(url)
+                    viewModel.analyzeUrl(url, context.applicationContext)
                 } else {
                     if (hasStoragePermission) {
                         val qualityToDownload = if (isResolutionSelectionEnabled) selectedFormat else selectedLightningFormat
@@ -962,7 +975,9 @@ fun SettingsContent(
     onResolutionSelectionChange: (Boolean) -> Unit,
     viewModel: DownloaderViewModel,
     context: android.content.Context,
-    onAboutClick: () -> Unit
+    onAboutClick: () -> Unit,
+    onPlatformClick: (LoginPlatform) -> Unit,
+    cookieRefreshTrigger: Int
 ) {
     val scrollState = rememberScrollState()
     val permissionManager = remember { PermissionManager(context) }
@@ -1061,6 +1076,69 @@ fun SettingsContent(
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
             ) { Text("Check", fontWeight = FontWeight.Bold) }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
+        
+        Text("Platform Accounts & Cookies", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text("Log into your accounts to bypass bot checks, age restrictions, and speed limits.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val platforms = LoginPlatform.values()
+            val rows = platforms.toList().chunked(2)
+            
+            for (row in rows) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    for (platform in row) {
+                        val hasCookies = remember(cookieRefreshTrigger) {
+                            NetscapeCookieWriter.hasCookiesForPlatform(context, platform.domain)
+                        }
+                        
+                        OutlinedButton(
+                            onClick = { onPlatformClick(platform) },
+                            modifier = Modifier.weight(1f).height(50.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(
+                                1.dp, 
+                                if (hasCookies) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f) 
+                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                            ),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = platform.iconResId),
+                                    contentDescription = platform.title,
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = platform.title,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = if (hasCookies) "Logged In" else "Tap to Login",
+                                        fontSize = 10.sp,
+                                        color = if (hasCookies) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))

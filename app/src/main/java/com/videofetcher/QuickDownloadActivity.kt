@@ -118,7 +118,7 @@ class QuickDownloadActivity : ComponentActivity() {
                 // Automatically trigger the background fetch if the user has the setting enabled
                 LaunchedEffect(sharedUrl) {
                     if (isResolutionSelectionEnabled && sharedUrl.isNotBlank()) {
-                        viewModel.analyzeUrl(sharedUrl)
+                        viewModel.analyzeUrl(sharedUrl, context.applicationContext)
                     }
                 }
 

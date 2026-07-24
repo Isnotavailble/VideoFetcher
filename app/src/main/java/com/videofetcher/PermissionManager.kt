@@ -19,6 +19,17 @@ class PermissionManager(private val context: Context) {
     
     private val customUriKey = "custom_folder_uri"
     private val customPathKey = "custom_folder_path"
+    private val userAgentKey = "saved_user_agent"
+
+    fun getUserAgent(): String? {
+        return prefs.getString(userAgentKey, null)
+    }
+
+    fun saveUserAgent(userAgent: String) {
+        if (userAgent.isNotBlank() && prefs.getString(userAgentKey, null) == null) {
+            prefs.edit { putString(userAgentKey, userAgent) }
+        }
+    }
 
     fun isResolutionSelectionEnabled(): Boolean {
         return prefs.getBoolean("resolution_selection_enabled", false) // Default is Instant "Best Quality" Mode

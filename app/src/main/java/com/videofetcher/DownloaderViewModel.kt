@@ -95,11 +95,19 @@ class DownloaderViewModel : ViewModel() {
             val currentVersion = YoutubeDL.getInstance().version(context)
             val latestVersion = manager.fetchLatestVersion(forceCheck)
 
-            if (latestVersion != null && latestVersion != currentVersion) {
-                _engineUpdateState.value = EngineUpdateState.UpdateAvailable(latestVersion)
+            if (latestVersion != null) {
+                if (latestVersion != currentVersion) {
+                    _engineUpdateState.value = EngineUpdateState.UpdateAvailable(latestVersion)
+                } else {
+                    if (forceCheck) {
+                        _engineUpdateState.value = EngineUpdateState.UpToDate
+                    } else {
+                        _engineUpdateState.value = EngineUpdateState.Idle
+                    }
+                }
             } else {
                 if (forceCheck) {
-                    _engineUpdateState.value = EngineUpdateState.UpToDate
+                    _engineUpdateState.value = EngineUpdateState.Error("Failed to check version. Please check network.")
                 } else {
                     _engineUpdateState.value = EngineUpdateState.Idle
                 }
@@ -110,18 +118,20 @@ class DownloaderViewModel : ViewModel() {
     fun updateEngine(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             _engineUpdateState.value = EngineUpdateState.Updating
-            try {
-                YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)
+            val manager = com.videofetcher.settings.EngineUpdateManager(context)
+            val success = manager.updateYtDlpDirectly(context)
+            if (success) {
                 _engineUpdateState.value = EngineUpdateState.Success
-                // Reboot engine
-                YoutubeDL.getInstance().init(context)
-                FFmpeg.getInstance().init(context)
-                // Set to idle so the dialog goes away
+                try {
+                    YoutubeDL.getInstance().init(context)
+                    FFmpeg.getInstance().init(context)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
                 delay(2000)
                 _engineUpdateState.value = EngineUpdateState.Idle
-            } catch (e: Exception) {
-                e.printStackTrace()
-                _engineUpdateState.value = EngineUpdateState.Error("Failed to update: ${e.message}")
+            } else {
+                _engineUpdateState.value = EngineUpdateState.Error("Failed to update engine. Check network connection.")
             }
         }
     }
@@ -131,7 +141,7 @@ class DownloaderViewModel : ViewModel() {
         _engineUpdateState.value = EngineUpdateState.Idle
     }
 
-    fun analyzeUrl(url: String) {
+    fun analyzeUrl(url: String, context: Context? = null) {
         analyzeJob?.cancel()
         if (url.isBlank()) {
             _videoInfoState.value = VideoInfoState.Idle
@@ -149,6 +159,17 @@ class DownloaderViewModel : ViewModel() {
             _videoInfoState.value = VideoInfoState.Fetching
             try {
                 val request = YoutubeDLRequest(url)
+
+                if (context != null) {
+                    val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, url)
+                    if (platformCookieFile != null) {
+                        request.addOption("--cookies", platformCookieFile.absolutePath)
+                        val savedUserAgent = PermissionManager(context).getUserAgent()
+                        if (!savedUserAgent.isNullOrBlank()) {
+                            request.addOption("--user-agent", savedUserAgent)
+                        }
+                    }
+                }
                 
                 // 1. Aggressive Pruning (Ignore comments, subtitles, and playlists)
                 request.addOption("--no-playlist")

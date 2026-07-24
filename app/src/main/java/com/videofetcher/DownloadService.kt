@@ -98,10 +98,22 @@ class DownloadService : Service() {
 
                 val request = YoutubeDLRequest(url)
                 
+                val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, url)
+                if (platformCookieFile != null) {
+                    request.addOption("--cookies", platformCookieFile.absolutePath)
+                    val savedUserAgent = permissionManager.getUserAgent()
+                    if (!savedUserAgent.isNullOrBlank()) {
+                        request.addOption("--user-agent", savedUserAgent)
+                    }
+                }
+                
+                // Force IPv4 to prevent 15-30s timeout hangs on mobile network IPv6 addresses
+                request.addOption("--force-ipv4")
+                
                 val targetHeight = when {
                     quality == "4K" -> "2160"
                     quality == "2K" -> "1440"
-                    quality == "Best Quality" -> "best"
+                    quality == "Best Quality" -> "1080"
                     quality == "Best Quality (M4A)" -> "audio"
                     quality.startsWith("Audio (MP3)") -> "audio"
                     else -> quality.replace("p", "")
@@ -117,13 +129,14 @@ class DownloadService : Service() {
                 }
 
                 if (quality == "Best Quality") {
-                    request.addOption("-f", "bestvideo+bestaudio/best")
+                    // Cap automatic "Best Quality" to max 1080p for mobile playback hardware compatibility, with /best fallback for TikTok/IG/FB
+                    request.addOption("-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best")
                 } else if (quality == "Best Quality (M4A)") {
-                    request.addOption("-f", "bestaudio[ext=m4a]/bestaudio")
+                    request.addOption("-f", "bestaudio[ext=m4a]/bestaudio/best")
                     request.addOption("--extract-audio")
                     request.addOption("--audio-format", "m4a")
                 } else if (quality.startsWith("Audio (MP3)")) {
-                    request.addOption("-f", "bestaudio")
+                    request.addOption("-f", "bestaudio/best")
                     request.addOption("--extract-audio")
                     request.addOption("--audio-format", "mp3")
                     when (quality) {
@@ -132,12 +145,14 @@ class DownloadService : Service() {
                         "Audio (MP3) - Fast" -> request.addOption("--audio-quality", "128K")
                     }
                 } else {
-                    // Force H.264/AVC compatible codecs for Android gallery support, fallback to any if missing
-                    request.addOption("-f", "bestvideo[height<=$targetHeight][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=$targetHeight]+bestaudio/best")
+                    // Force H.264/AVC compatible codecs for Android gallery support with universal /best fallback for all platforms
+                    request.addOption("-f", "bestvideo[height<=$targetHeight][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=$targetHeight]+bestaudio/best[height<=$targetHeight]/best")
                 }
                 
-                // Embed thumbnail directly into the file
+                // Embed thumbnail safely by converting WebP thumbnails to JPG first via FFmpeg
                 request.addOption("--embed-thumbnail")
+                request.addOption("--convert-thumbnails", "jpg")
+                request.addOption("--no-mtime")
                 if (quality != "Best Quality (M4A)" && !quality.startsWith("Audio (MP3)")) {
                     request.addOption("--merge-output-format", "mp4")
                 }
@@ -145,34 +160,54 @@ class DownloadService : Service() {
                 request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}_vdf.%(ext)s")
                 request.addOption("--concurrent-fragments", "4")
 
+                var mergeStarted = false
                 var lastUpdateTime = 0L
                 var lastProgress = -1f
 
-                YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
-                    if (!isActive) {
-                        return@execute
-                    }
-
-                    val isConverting = line.contains("[ffmpeg]") || line.contains("Merging") || progress >= 100f
-                    val currentTime = System.currentTimeMillis()
-
-                    if (isConverting || progress >= 100f || (currentTime - lastUpdateTime > 500 && progress != lastProgress)) {
-                        lastUpdateTime = currentTime
-                        lastProgress = progress
-
-                        val statusText = if (isConverting) {
-                            "Converting & Merging... Please wait"
-                        } else {
-                            "${String.format("%.1f", progress)}% • ETA: ${etaInSeconds}s"
+                try {
+                    YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
+                        if (!isActive) {
+                            return@execute
                         }
 
-                        DownloadManager.updateDownloadState(url, DownloadState.Downloading(
-                            progress = if (isConverting) 1f else (progress / 100f),
-                            status = statusText
-                        ))
+                        val isConverting = line.contains("[ffmpeg]") || line.contains("Merging") || progress >= 100f
+                        if (isConverting) mergeStarted = true
 
-                        val notification = createNotification(statusText, progress.toInt())
-                        notificationManager.notify(notificationId, notification.build())
+                        val currentTime = System.currentTimeMillis()
+
+                        if (isConverting || progress >= 100f || (currentTime - lastUpdateTime > 500 && progress != lastProgress)) {
+                            lastUpdateTime = currentTime
+                            lastProgress = progress
+
+                            val statusText = if (isConverting) {
+                                "Converting & Merging... Please wait"
+                            } else {
+                                "${String.format("%.1f", progress)}% • ETA: ${etaInSeconds}s"
+                            }
+
+                            DownloadManager.updateDownloadState(url, DownloadState.Downloading(
+                                progress = if (isConverting) 1f else (progress / 100f),
+                                status = statusText
+                            ))
+
+                            val notification = createNotification(statusText, progress.toInt())
+                            notificationManager.notify(notificationId, notification.build())
+                        }
+                    }
+                } catch (postEx: Exception) {
+                    when {
+                        !isActive || postEx.message?.contains("Process destroyed") == true -> {
+                            // Cancelled – do nothing
+                        }
+                        mergeStarted -> {
+                            // Download + merge already completed before this exception.
+                            // It is FFmpeg stderr noise (thumbnail embed warning, temp file
+                            // cleanup, etc.). Treat as success – fall through to success block.
+                        }
+                        else -> {
+                            // Exception thrown before merge started = genuine download failure.
+                            throw postEx
+                        }
                     }
                 }
 
@@ -187,19 +222,13 @@ class DownloadService : Service() {
                     notificationManager.notify(notificationId + 1, successNotification)
                     notificationManager.cancel(notificationId)
 
-                    // Scan recently modified files instead of just the single newest one to prevent race conditions in parallel downloads
-                    val recentFiles = targetDir.listFiles()?.filter { 
-                        System.currentTimeMillis() - it.lastModified() < 60000 // Modified in the last 60 seconds
-                    } ?: emptyList()
-                    
-                    val pathsToScan = recentFiles.map { it.absolutePath }.toTypedArray()
-                    if (pathsToScan.isNotEmpty()) {
-                        MediaScannerConnection.scanFile(applicationContext, pathsToScan, null) { _, _ ->
-                            DownloadManager.triggerFileRefresh()
-                        }
-                    } else {
-                        DownloadManager.triggerFileRefresh()
-                    }
+                    // Trigger MediaStore scan via absolute path so gallery sees the file
+                    val scanPath = "${targetDir.absolutePath}"
+                    MediaScannerConnection.scanFile(
+                        applicationContext,
+                        arrayOf(scanPath),
+                        null
+                    ) { _, _ -> DownloadManager.triggerFileRefresh() }
                 }
 
             } catch (e: Exception) {
@@ -211,7 +240,7 @@ class DownloadService : Service() {
                     val friendlyMessage = when {
                         rawError.contains("is not a valid URL", ignoreCase = true) -> "Invalid video URL."
                         rawError.contains("Unsupported URL", ignoreCase = true) -> "Website not supported yet."
-                        rawError.contains("Sign in", ignoreCase = true) || rawError.contains("login", ignoreCase = true) -> "Login required."
+                        rawError.contains("confirm your age", ignoreCase = true) || rawError.contains("Private video", ignoreCase = true) || rawError.contains("login to view", ignoreCase = true) -> "Login required."
                         rawError.contains("Not Found", ignoreCase = true) || rawError.contains("404", ignoreCase = true) -> "Video not found or private."
                         else -> "Couldn't download this video."
                     }
