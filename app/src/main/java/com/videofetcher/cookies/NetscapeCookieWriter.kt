@@ -75,6 +75,35 @@ object NetscapeCookieWriter {
     }
 
     /**
+     * Resolves the persistent User-Agent backup directory (.useragent inside VideoFetcher download folder).
+     */
+    fun getPersistentUserAgentDir(context: Context): File {
+        val permissionManager = PermissionManager(context)
+        val customPath = permissionManager.getCustomDownloadFolderPath()
+        val backupDir = File(customPath, ".useragent")
+        try {
+            if (!backupDir.exists()) backupDir.mkdirs()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return backupDir
+    }
+
+    /**
+     * Saves a domain-specific User-Agent into the persistent backup folder .useragent/useragent_<domainKey>.txt
+     */
+    fun syncUserAgentToBackup(context: Context, domainKey: String, userAgent: String) {
+        if (userAgent.isBlank() || domainKey.isBlank()) return
+        try {
+            val backupDir = getPersistentUserAgentDir(context)
+            val backupFile = File(backupDir, "useragent_${domainKey}.txt")
+            backupFile.writeText(userAgent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
      * Pre-injects a saved Netscape cookie file into Android's native WebView CookieManager.
      */
     fun injectCookiesIntoCookieManager(context: Context, domainOrUrl: String) {
@@ -91,16 +120,17 @@ object NetscapeCookieWriter {
                 if (trimmed.isNotBlank() && !trimmed.startsWith("#")) {
                     val parts = trimmed.split("\t")
                     if (parts.size >= 7) {
-                        val rawDomain = parts[0]
-                        val path = parts[2]
-                        val name = parts[5]
-                        val value = parts[6]
+                        val domain = parts[0].trim()
+                        val path = parts[2].trim().ifEmpty { "/" }
+                        val name = parts[5].trim()
+                        val value = parts[6].trim()
 
-                        val cleanDomain = rawDomain.removePrefix(".")
-                        val cookieString = "$name=$value; Domain=.$cleanDomain; Path=$path"
-                        cookieManager.setCookie("https://$cleanDomain", cookieString)
-                        cookieManager.setCookie("https://www.$cleanDomain", cookieString)
-                        cookieManager.setCookie("https://m.$cleanDomain", cookieString)
+                        if (name.isNotBlank()) {
+                            val cleanDomain = if (domain.startsWith(".")) domain else ".$domain"
+                            val targetUrl = "https://${cleanDomain.removePrefix(".")}"
+                            val cookieString = "$name=$value; Domain=$cleanDomain; Path=$path; Secure; SameSite=None"
+                            cookieManager.setCookie(targetUrl, cookieString)
+                        }
                     }
                 }
             }
@@ -111,16 +141,18 @@ object NetscapeCookieWriter {
     }
 
     /**
-     * Restores surviving cookie files from SAF Tree Uri if direct File access was blocked after app reinstall.
+     * Restores surviving cookie files and User-Agent files from SAF Tree Uri if direct File access was blocked after app reinstall.
      */
     fun restoreFromSafTreeUri(context: Context, treeUri: Uri): Boolean {
         var restoredAny = false
+        val permissionManager = PermissionManager(context)
+        val contentResolver = context.contentResolver
+        val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+
+        // 1. Restore .cookies
         try {
-            val contentResolver = context.contentResolver
-            val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
             val cookiesDocId = "$treeDocumentId/.cookies"
             val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, cookiesDocId)
-
             val projection = arrayOf(
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                 DocumentsContract.Document.COLUMN_DISPLAY_NAME,
@@ -152,14 +184,51 @@ object NetscapeCookieWriter {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+
+        // 2. Restore .useragent
+        try {
+            val userAgentDocId = "$treeDocumentId/.useragent"
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, userAgentDocId)
+            val projection = arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME
+            )
+
+            contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+
+                while (cursor.moveToNext()) {
+                    val docId = cursor.getString(idCol)
+                    val name = cursor.getString(nameCol)
+
+                    if (!name.isNullOrBlank() && name.startsWith("useragent_") && name.endsWith(".txt")) {
+                        val domainKey = name.removePrefix("useragent_").removeSuffix(".txt")
+                        val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                        contentResolver.openInputStream(fileUri)?.use { inputStream ->
+                            val userAgentStr = inputStream.bufferedReader().use { it.readText().trim() }
+                            if (userAgentStr.isNotBlank()) {
+                                permissionManager.saveUserAgentForDomain(domainKey, userAgentStr)
+                                restoredAny = true
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         return restoredAny
     }
 
     /**
-     * Restores surviving cookie files from the .cookies backup folder into context.filesDir after app reinstall.
+     * Restores surviving cookie files and User-Agent files into context.filesDir / SharedPreferences after app reinstall.
      */
     fun restoreAllBackupsToPrivateStorage(context: Context) {
-        // 1. Direct File access
+        val permissionManager = PermissionManager(context)
+
+        // 1. Direct File access for .cookies
         try {
             val backupDir = getPersistentBackupDir(context)
             if (backupDir.exists() && backupDir.isDirectory) {
@@ -179,9 +248,29 @@ object NetscapeCookieWriter {
             e.printStackTrace()
         }
 
-        // 2. SAF Tree URI access if direct File.listFiles() was blocked after reinstall
+        // 2. Direct File access for .useragent
         try {
-            val permissionManager = PermissionManager(context)
+            val uaDir = getPersistentUserAgentDir(context)
+            if (uaDir.exists() && uaDir.isDirectory) {
+                val files = uaDir.listFiles()
+                if (files != null) {
+                    for (file in files) {
+                        if (file.isFile && file.name.startsWith("useragent_") && file.name.endsWith(".txt")) {
+                            val domainKey = file.name.removePrefix("useragent_").removeSuffix(".txt")
+                            val userAgentStr = file.readText().trim()
+                            if (userAgentStr.isNotBlank()) {
+                                permissionManager.saveUserAgentForDomain(domainKey, userAgentStr)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 3. SAF Tree URI access if direct File.listFiles() was blocked after reinstall
+        try {
             val safUri = permissionManager.getCustomDownloadFolderUri() ?: permissionManager.getSavedFolderUri()
             if (safUri != null) {
                 restoreFromSafTreeUri(context, safUri)
@@ -259,9 +348,11 @@ object NetscapeCookieWriter {
                 }
             }
 
-            val targetDomain = if (domainOrUrl.contains(".")) {
-                val clean = domainOrUrl.substringAfter("://").substringBefore("/")
-                if (clean.startsWith(".")) clean else ".$clean"
+            val targetDomain = if (domainKey == "youtube") {
+                ".youtube.com"
+            } else if (domainOrUrl.contains(".")) {
+                val host = domainOrUrl.substringAfter("://").substringBefore("/").removePrefix("www.").removePrefix("m.")
+                if (host.startsWith(".")) host else ".$host"
             } else ".${domainKey}.com"
 
             val newPairs = rawCookieString.split(";")

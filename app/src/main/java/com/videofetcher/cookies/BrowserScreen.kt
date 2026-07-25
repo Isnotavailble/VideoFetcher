@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.videofetcher.PermissionManager
 import com.videofetcher.R
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -258,6 +259,13 @@ fun BrowserScreen(
 
                             val hasAuth = NetscapeCookieWriter.hasAuthTokens(activeDomainKey, combinedCookies)
                             if (hasAuth) {
+                                 val liveUserAgent = webViewInstance?.settings?.userAgentString ?: ""
+                                val permissionManager = PermissionManager(context)
+                                if (liveUserAgent.isNotBlank()) {
+                                    permissionManager.saveUserAgentForDomain(activeDomainKey, liveUserAgent)
+                                    NetscapeCookieWriter.syncUserAgentToBackup(context, activeDomainKey, liveUserAgent)
+                                }
+
                                 val success = NetscapeCookieWriter.writeCookies(context, currentUrl, combinedCookies)
                                 if (success) {
                                     Toast.makeText(context, "Cookies saved for ${activeDomainKey.uppercase()}!", Toast.LENGTH_SHORT).show()
@@ -290,6 +298,10 @@ fun BrowserScreen(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
+                        val permissionManager = PermissionManager(ctx)
+                        val domainKey = NetscapeCookieWriter.getDomainKey(initialUrl)
+                        val domainUserAgent = permissionManager.getUserAgentForDomain(domainKey)
+
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
@@ -299,8 +311,17 @@ fun BrowserScreen(
                             setSupportZoom(true)
                             builtInZoomControls = true
                             displayZoomControls = false
-                            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                            userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+                            mediaPlaybackRequiresUserGesture = false
+                            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                            if (!domainUserAgent.isNullOrBlank()) {
+                                userAgentString = domainUserAgent
+                            }
+                        }
+
+                        // Save current User-Agent if not yet stored
+                        val extractedUserAgent = settings.userAgentString
+                        if (!extractedUserAgent.isNullOrBlank()) {
+                            permissionManager.saveUserAgent(extractedUserAgent)
                         }
 
                         val cookieManager = CookieManager.getInstance()
@@ -317,7 +338,6 @@ fun BrowserScreen(
                                 url?.let {
                                     currentUrl = it
                                     urlInputText = it
-                                    NetscapeCookieWriter.injectCookiesIntoCookieManager(ctx, it)
                                 }
                             }
 

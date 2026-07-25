@@ -98,13 +98,15 @@ class DownloadService : Service() {
 
                 val request = YoutubeDLRequest(url)
                 
+                val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(url)
+                val domainUserAgent = permissionManager.getUserAgentForDomain(domainKey)
+                if (!domainUserAgent.isNullOrBlank()) {
+                    request.addOption("--user-agent", domainUserAgent)
+                }
+
                 val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, url)
                 if (platformCookieFile != null) {
                     request.addOption("--cookies", platformCookieFile.absolutePath)
-                    val savedUserAgent = permissionManager.getUserAgent()
-                    if (!savedUserAgent.isNullOrBlank()) {
-                        request.addOption("--user-agent", savedUserAgent)
-                    }
                 }
                 
                 // Force IPv4 to prevent 15-30s timeout hangs on mobile network IPv6 addresses

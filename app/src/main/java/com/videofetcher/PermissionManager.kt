@@ -21,12 +21,35 @@ class PermissionManager(private val context: Context) {
     private val customPathKey = "custom_folder_path"
     private val userAgentKey = "saved_user_agent"
 
+    companion object {
+        const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+    }
+
+    fun getEffectiveUserAgent(): String {
+        val saved = prefs.getString(userAgentKey, null)
+        return if (!saved.isNullOrBlank()) saved else DEFAULT_USER_AGENT
+    }
+
+    fun getUserAgentForDomain(domainKey: String): String? {
+        val domainSpecific = prefs.getString("user_agent_$domainKey", null)
+        return if (!domainSpecific.isNullOrBlank()) domainSpecific else getUserAgent()
+    }
+
+    fun saveUserAgentForDomain(domainKey: String, userAgent: String) {
+        if (userAgent.isNotBlank() && domainKey.isNotBlank()) {
+            prefs.edit {
+                putString("user_agent_$domainKey", userAgent)
+                putString(userAgentKey, userAgent)
+            }
+        }
+    }
+
     fun getUserAgent(): String? {
         return prefs.getString(userAgentKey, null)
     }
 
     fun saveUserAgent(userAgent: String) {
-        if (userAgent.isNotBlank() && prefs.getString(userAgentKey, null) == null) {
+        if (userAgent.isNotBlank()) {
             prefs.edit { putString(userAgentKey, userAgent) }
         }
     }

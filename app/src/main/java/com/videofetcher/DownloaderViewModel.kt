@@ -161,13 +161,16 @@ class DownloaderViewModel : ViewModel() {
                 val request = YoutubeDLRequest(url)
 
                 if (context != null) {
+                    val permissionManager = PermissionManager(context)
+                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(url)
+                    val domainUserAgent = permissionManager.getUserAgentForDomain(domainKey)
+                    if (!domainUserAgent.isNullOrBlank()) {
+                        request.addOption("--user-agent", domainUserAgent)
+                    }
+
                     val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, url)
                     if (platformCookieFile != null) {
                         request.addOption("--cookies", platformCookieFile.absolutePath)
-                        val savedUserAgent = PermissionManager(context).getUserAgent()
-                        if (!savedUserAgent.isNullOrBlank()) {
-                            request.addOption("--user-agent", savedUserAgent)
-                        }
                     }
                 }
                 
