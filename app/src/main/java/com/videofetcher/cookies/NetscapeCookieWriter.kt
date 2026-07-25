@@ -269,12 +269,9 @@ object NetscapeCookieWriter {
             e.printStackTrace()
         }
 
-        // 3. SAF Tree URI access if direct File.listFiles() was blocked after reinstall
+        // 3. Delegate User-Agent restoration to UserAgentManager
         try {
-            val safUri = permissionManager.getCustomDownloadFolderUri() ?: permissionManager.getSavedFolderUri()
-            if (safUri != null) {
-                restoreFromSafTreeUri(context, safUri)
-            }
+            UserAgentManager.restoreAllUserAgentsToPrivateStorage(context)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -348,12 +345,17 @@ object NetscapeCookieWriter {
                 }
             }
 
-            val targetDomain = if (domainKey == "youtube") {
-                ".youtube.com"
-            } else if (domainOrUrl.contains(".")) {
-                val host = domainOrUrl.substringAfter("://").substringBefore("/").removePrefix("www.").removePrefix("m.")
-                if (host.startsWith(".")) host else ".$host"
-            } else ".${domainKey}.com"
+            val targetDomain = when (domainKey) {
+                "youtube" -> ".youtube.com"
+                "facebook" -> ".facebook.com"
+                "instagram" -> ".instagram.com"
+                "tiktok" -> ".tiktok.com"
+                "twitter" -> ".twitter.com"
+                else -> if (domainOrUrl.contains(".")) {
+                    val host = domainOrUrl.substringAfter("://").substringBefore("/").removePrefix("www.").removePrefix("m.").removePrefix("touch.")
+                    if (host.startsWith(".")) host else ".$host"
+                } else ".${domainKey}.com"
+            }
 
             val newPairs = rawCookieString.split(";")
             for (pair in newPairs) {

@@ -22,36 +22,27 @@ class PermissionManager(private val context: Context) {
     private val userAgentKey = "saved_user_agent"
 
     companion object {
-        const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+        val DEFAULT_USER_AGENT: String get() = com.videofetcher.cookies.UserAgentManager.DESKTOP_USER_AGENT
     }
 
     fun getEffectiveUserAgent(): String {
-        val saved = prefs.getString(userAgentKey, null)
-        return if (!saved.isNullOrBlank()) saved else DEFAULT_USER_AGENT
+        return com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, "")
     }
 
-    fun getUserAgentForDomain(domainKey: String): String? {
-        val domainSpecific = prefs.getString("user_agent_$domainKey", null)
-        return if (!domainSpecific.isNullOrBlank()) domainSpecific else getUserAgent()
+    fun getUserAgentForDomain(domainKey: String): String {
+        return com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, domainKey)
     }
 
     fun saveUserAgentForDomain(domainKey: String, userAgent: String) {
-        if (userAgent.isNotBlank() && domainKey.isNotBlank()) {
-            prefs.edit {
-                putString("user_agent_$domainKey", userAgent)
-                putString(userAgentKey, userAgent)
-            }
-        }
+        com.videofetcher.cookies.UserAgentManager.saveUserAgentForDomain(context, domainKey, userAgent)
     }
 
-    fun getUserAgent(): String? {
-        return prefs.getString(userAgentKey, null)
+    fun getUserAgent(): String {
+        return com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, "")
     }
 
     fun saveUserAgent(userAgent: String) {
-        if (userAgent.isNotBlank()) {
-            prefs.edit { putString(userAgentKey, userAgent) }
-        }
+        com.videofetcher.cookies.UserAgentManager.saveUserAgentForDomain(context, "general", userAgent)
     }
 
     fun isResolutionSelectionEnabled(): Boolean {

@@ -96,18 +96,15 @@ class DownloadService : Service() {
                 val targetDir = File(customPath)
                 if (!targetDir.exists()) targetDir.mkdirs()
 
-                val request = YoutubeDLRequest(url)
+                val targetUrl = resolveCanonicalUrl(url)
+                val request = YoutubeDLRequest(targetUrl)
                 
-                val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(url)
-                val domainUserAgent = permissionManager.getUserAgentForDomain(domainKey)
-                if (!domainUserAgent.isNullOrBlank()) {
-                    request.addOption("--user-agent", domainUserAgent)
-                }
-
-                val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, url)
+                val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(targetUrl)
+                val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, targetUrl)
                 if (platformCookieFile != null) {
                     request.addOption("--cookies", platformCookieFile.absolutePath)
-                    // Auto-retry session challenges when downloading with cookies to guarantee first-attempt success
+                    val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(applicationContext, domainKey)
+                    request.addOption("--user-agent", effectiveUserAgent)
                     request.addOption("--retries", "3")
                     request.addOption("--fragment-retries", "5")
                 }
@@ -134,8 +131,8 @@ class DownloadService : Service() {
                 }
 
                 if (quality == "Best Quality") {
-                    // Cap automatic "Best Quality" to max 1080p for mobile playback hardware compatibility, with /best fallback for TikTok/IG/FB
-                    request.addOption("-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best")
+                    // Cap automatic "Best Quality" to max 1080p for mobile playback hardware compatibility, with /best/b fallback for Facebook/TikTok/IG
+                    request.addOption("-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best/b")
                 } else if (quality == "Best Quality (M4A)") {
                     request.addOption("-f", "bestaudio[ext=m4a]/bestaudio/best")
                     request.addOption("--extract-audio")
@@ -150,8 +147,8 @@ class DownloadService : Service() {
                         "Audio (MP3) - Fast" -> request.addOption("--audio-quality", "128K")
                     }
                 } else {
-                    // Force H.264/AVC compatible codecs for Android gallery support with universal /best fallback for all platforms
-                    request.addOption("-f", "bestvideo[height<=$targetHeight][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=$targetHeight]+bestaudio/best[height<=$targetHeight]/best")
+                    // Force H.264/AVC compatible codecs for Android gallery support with universal /best/b fallback for all platforms
+                    request.addOption("-f", "bestvideo[height<=$targetHeight][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=$targetHeight]+bestaudio/best[height<=$targetHeight]/best/b")
                 }
                 
                 // Embed thumbnail safely by converting WebP thumbnails to JPG first via FFmpeg
@@ -246,9 +243,12 @@ class DownloadService : Service() {
                     val friendlyMessage = when {
                         rawError.contains("is not a valid URL", ignoreCase = true) -> "Invalid video URL."
                         rawError.contains("Unsupported URL", ignoreCase = true) -> "Website not supported yet."
-                        rawError.contains("confirm your age", ignoreCase = true) || rawError.contains("Private video", ignoreCase = true) || rawError.contains("login to view", ignoreCase = true) -> "Login required."
+                        rawError.contains("confirm your age", ignoreCase = true) || rawError.contains("Private video", ignoreCase = true) || rawError.contains("login to view", ignoreCase = true) || rawError.contains("login required", ignoreCase = true) -> "Login required."
                         rawError.contains("Not Found", ignoreCase = true) || rawError.contains("404", ignoreCase = true) -> "Video not found or private."
-                        else -> "Couldn't download this video."
+                        rawError.contains("403", ignoreCase = true) || rawError.contains("Forbidden", ignoreCase = true) -> "Access forbidden (HTTP 403)."
+                        rawError.contains("Requested format", ignoreCase = true) -> "Selected format not available."
+                        else -> rawError.lines().firstOrNull { it.contains("ERROR:", ignoreCase = true) }?.substringAfter("ERROR:")?.trim()?.take(80)
+                                ?: rawError.take(80).ifEmpty { "Couldn't download this video." }
                     }
                     
                     DownloadManager.updateDownloadState(url, DownloadState.Error(friendlyMessage))
@@ -347,5 +347,35 @@ class DownloadService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         serviceJob.cancel()
+    }
+
+    private fun resolveCanonicalUrl(url: String): String {
+        if (!url.contains("facebook.com/share") && !url.contains("fb.watch") && !url.contains("youtu.be") && !url.contains("instagr.am")) {
+            return url
+        }
+        return try {
+            var current = url
+            var redirects = 0
+            while (redirects < 5) {
+                val conn = java.net.URL(current).openConnection() as java.net.HttpURLConnection
+                conn.instanceFollowRedirects = false
+                conn.requestMethod = "HEAD"
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                conn.connectTimeout = 4000
+                conn.readTimeout = 4000
+                val code = conn.responseCode
+                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                    val loc = conn.getHeaderField("Location")
+                    if (!loc.isNullOrBlank()) {
+                        current = if (loc.startsWith("http")) loc else "https://www.facebook.com$loc"
+                        redirects++
+                    } else break
+                } else break
+                conn.disconnect()
+            }
+            current
+        } catch (e: Exception) {
+            url
+        }
     }
 }

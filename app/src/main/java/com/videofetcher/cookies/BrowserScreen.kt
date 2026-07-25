@@ -253,6 +253,9 @@ fun BrowserScreen(
                                 "https://$cleanDomain.com",
                                 "https://www.$cleanDomain.com",
                                 "https://m.$cleanDomain.com",
+                                "https://touch.$cleanDomain.com",
+                                "https://web.$cleanDomain.com",
+                                "https://mbasic.facebook.com",
                                 "https://accounts.google.com"
                             )
                             val combinedCookies = domainsToQuery.mapNotNull { cookieManager.getCookie(it) }.joinToString("; ")
@@ -318,10 +321,10 @@ fun BrowserScreen(
                             }
                         }
 
-                        // Save current User-Agent if not yet stored
+                        // Save current User-Agent via UserAgentManager
                         val extractedUserAgent = settings.userAgentString
                         if (!extractedUserAgent.isNullOrBlank()) {
-                            permissionManager.saveUserAgent(extractedUserAgent)
+                            com.videofetcher.cookies.UserAgentManager.saveUserAgentForDomain(ctx, activeDomainKey, extractedUserAgent)
                         }
 
                         val cookieManager = CookieManager.getInstance()

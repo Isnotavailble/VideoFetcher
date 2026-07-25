@@ -158,20 +158,17 @@ class DownloaderViewModel : ViewModel() {
         analyzeJob = viewModelScope.launch(Dispatchers.IO) {
             _videoInfoState.value = VideoInfoState.Fetching
             try {
-                val request = YoutubeDLRequest(url)
+                val targetUrl = resolveCanonicalUrl(url)
+                val request = YoutubeDLRequest(targetUrl)
 
                 if (context != null) {
-                    val permissionManager = PermissionManager(context)
-                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(url)
-                    val domainUserAgent = permissionManager.getUserAgentForDomain(domainKey)
-                    if (!domainUserAgent.isNullOrBlank()) {
-                        request.addOption("--user-agent", domainUserAgent)
-                    }
+                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(targetUrl)
+                    val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, targetUrl)
 
-                    val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, url)
                     if (platformCookieFile != null) {
                         request.addOption("--cookies", platformCookieFile.absolutePath)
-                        // Auto-retry session challenges when downloading with cookies to guarantee first-attempt success
+                        val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, domainKey)
+                        request.addOption("--user-agent", effectiveUserAgent)
                         request.addOption("--retries", "3")
                         request.addOption("--fragment-retries", "5")
                     }
@@ -716,6 +713,38 @@ class DownloaderViewModel : ViewModel() {
         if (currentState is FilesListState.Success) {
             val updatedList = currentState.files.filter { it.path != fileDetails.path }
             _filesListState.value = FilesListState.Success(updatedList)
+        }
+    }
+
+    private suspend fun resolveCanonicalUrl(url: String): String {
+        if (!url.contains("facebook.com/share") && !url.contains("fb.watch") && !url.contains("youtu.be") && !url.contains("instagr.am")) {
+            return url
+        }
+        return withContext(Dispatchers.IO) {
+            try {
+                var current = url
+                var redirects = 0
+                while (redirects < 5) {
+                    val conn = java.net.URL(current).openConnection() as java.net.HttpURLConnection
+                    conn.instanceFollowRedirects = false
+                    conn.requestMethod = "HEAD"
+                    conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    conn.connectTimeout = 4000
+                    conn.readTimeout = 4000
+                    val code = conn.responseCode
+                    if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                        val loc = conn.getHeaderField("Location")
+                        if (!loc.isNullOrBlank()) {
+                            current = if (loc.startsWith("http")) loc else "https://www.facebook.com$loc"
+                            redirects++
+                        } else break
+                    } else break
+                    conn.disconnect()
+                }
+                current
+            } catch (e: Exception) {
+                url
+            }
         }
     }
 }
