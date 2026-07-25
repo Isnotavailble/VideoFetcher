@@ -95,11 +95,19 @@ class DownloaderViewModel : ViewModel() {
             val currentVersion = YoutubeDL.getInstance().version(context)
             val latestVersion = manager.fetchLatestVersion(forceCheck)
 
-            if (latestVersion != null && latestVersion != currentVersion) {
-                _engineUpdateState.value = EngineUpdateState.UpdateAvailable(latestVersion)
+            if (latestVersion != null) {
+                if (latestVersion != currentVersion) {
+                    _engineUpdateState.value = EngineUpdateState.UpdateAvailable(latestVersion)
+                } else {
+                    if (forceCheck) {
+                        _engineUpdateState.value = EngineUpdateState.UpToDate
+                    } else {
+                        _engineUpdateState.value = EngineUpdateState.Idle
+                    }
+                }
             } else {
                 if (forceCheck) {
-                    _engineUpdateState.value = EngineUpdateState.UpToDate
+                    _engineUpdateState.value = EngineUpdateState.Error("Failed to check version. Please check network.")
                 } else {
                     _engineUpdateState.value = EngineUpdateState.Idle
                 }
@@ -110,18 +118,20 @@ class DownloaderViewModel : ViewModel() {
     fun updateEngine(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             _engineUpdateState.value = EngineUpdateState.Updating
-            try {
-                YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)
+            val manager = com.videofetcher.settings.EngineUpdateManager(context)
+            val success = manager.updateYtDlpDirectly(context)
+            if (success) {
                 _engineUpdateState.value = EngineUpdateState.Success
-                // Reboot engine
-                YoutubeDL.getInstance().init(context)
-                FFmpeg.getInstance().init(context)
-                // Set to idle so the dialog goes away
+                try {
+                    YoutubeDL.getInstance().init(context)
+                    FFmpeg.getInstance().init(context)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
                 delay(2000)
                 _engineUpdateState.value = EngineUpdateState.Idle
-            } catch (e: Exception) {
-                e.printStackTrace()
-                _engineUpdateState.value = EngineUpdateState.Error("Failed to update: ${e.message}")
+            } else {
+                _engineUpdateState.value = EngineUpdateState.Error("Failed to update engine. Check network connection.")
             }
         }
     }
@@ -131,7 +141,7 @@ class DownloaderViewModel : ViewModel() {
         _engineUpdateState.value = EngineUpdateState.Idle
     }
 
-    fun analyzeUrl(url: String) {
+    fun analyzeUrl(url: String, context: Context? = null) {
         analyzeJob?.cancel()
         if (url.isBlank()) {
             _videoInfoState.value = VideoInfoState.Idle
@@ -148,7 +158,21 @@ class DownloaderViewModel : ViewModel() {
         analyzeJob = viewModelScope.launch(Dispatchers.IO) {
             _videoInfoState.value = VideoInfoState.Fetching
             try {
-                val request = YoutubeDLRequest(url)
+                val targetUrl = resolveCanonicalUrl(url)
+                val request = YoutubeDLRequest(targetUrl)
+
+                if (context != null) {
+                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(targetUrl)
+                    val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, targetUrl)
+
+                    if (platformCookieFile != null) {
+                        request.addOption("--cookies", platformCookieFile.absolutePath)
+                        val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, domainKey)
+                        request.addOption("--user-agent", effectiveUserAgent)
+                        request.addOption("--retries", "3")
+                        request.addOption("--fragment-retries", "5")
+                    }
+                }
                 
                 // 1. Aggressive Pruning (Ignore comments, subtitles, and playlists)
                 request.addOption("--no-playlist")
@@ -689,6 +713,38 @@ class DownloaderViewModel : ViewModel() {
         if (currentState is FilesListState.Success) {
             val updatedList = currentState.files.filter { it.path != fileDetails.path }
             _filesListState.value = FilesListState.Success(updatedList)
+        }
+    }
+
+    private suspend fun resolveCanonicalUrl(url: String): String {
+        if (!url.contains("facebook.com/share") && !url.contains("fb.watch") && !url.contains("youtu.be") && !url.contains("instagr.am")) {
+            return url
+        }
+        return withContext(Dispatchers.IO) {
+            try {
+                var current = url
+                var redirects = 0
+                while (redirects < 5) {
+                    val conn = java.net.URL(current).openConnection() as java.net.HttpURLConnection
+                    conn.instanceFollowRedirects = false
+                    conn.requestMethod = "HEAD"
+                    conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    conn.connectTimeout = 4000
+                    conn.readTimeout = 4000
+                    val code = conn.responseCode
+                    if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                        val loc = conn.getHeaderField("Location")
+                        if (!loc.isNullOrBlank()) {
+                            current = if (loc.startsWith("http")) loc else "https://www.facebook.com$loc"
+                            redirects++
+                        } else break
+                    } else break
+                    conn.disconnect()
+                }
+                current
+            } catch (e: Exception) {
+                url
+            }
         }
     }
 }

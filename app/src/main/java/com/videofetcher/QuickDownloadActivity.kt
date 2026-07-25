@@ -39,6 +39,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
 import com.videofetcher.settings.SettingsManager
@@ -61,6 +62,11 @@ class QuickDownloadActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         
         settingsManager = SettingsManager(applicationContext)
+
+        // Asynchronously restore surviving persistent cookie backups into private app storage on launch
+        lifecycleScope.launch(Dispatchers.IO) {
+            com.videofetcher.cookies.NetscapeCookieWriter.restoreAllBackupsToPrivateStorage(applicationContext)
+        }
 
         var sharedUrl = ""
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
@@ -118,7 +124,7 @@ class QuickDownloadActivity : ComponentActivity() {
                 // Automatically trigger the background fetch if the user has the setting enabled
                 LaunchedEffect(sharedUrl) {
                     if (isResolutionSelectionEnabled && sharedUrl.isNotBlank()) {
-                        viewModel.analyzeUrl(sharedUrl)
+                        viewModel.analyzeUrl(sharedUrl, context.applicationContext)
                     }
                 }
 

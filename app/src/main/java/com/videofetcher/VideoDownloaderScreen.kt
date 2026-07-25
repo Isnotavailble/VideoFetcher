@@ -8,6 +8,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import com.videofetcher.cookies.NetscapeCookieWriter
+import com.videofetcher.cookies.BrowserScreen
+import com.videofetcher.cookies.CookieManagementScreen
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -194,9 +197,26 @@ fun VideoDownloaderUI(
     val isReady = engineState is EngineState.Idle
 
     var showAboutScreen by remember { mutableStateOf(false) }
+    var activeBrowserUrl by remember { mutableStateOf<String?>(null) }
+    var showCookieManager by remember { mutableStateOf(false) }
+    var cookieRefreshTrigger by remember { mutableStateOf(0) }
 
     if (showAboutScreen) {
         AboutScreen(onBack = { showAboutScreen = false })
+    } else if (activeBrowserUrl != null) {
+        BrowserScreen(
+            initialUrl = activeBrowserUrl!!,
+            onBack = { activeBrowserUrl = null },
+            onCookiesSaved = { cookieRefreshTrigger++ }
+        )
+    } else if (showCookieManager) {
+        CookieManagementScreen(
+            onBack = { showCookieManager = false },
+            onOpenBrowserForDomain = { domainUrl ->
+                activeBrowserUrl = domainUrl
+                showCookieManager = false
+            }
+        )
     } else {
     Scaffold(
         bottomBar = {
@@ -275,16 +295,19 @@ fun VideoDownloaderUI(
                 )
                 AppTab.FILES -> FilesContent(pausedDownloads, filesListState, viewModel, context, hasStoragePermission, requestStoragePermission)
                 AppTab.SETTINGS -> SettingsContent(
-                    isDarkTheme = isDarkTheme, 
-                    onThemeToggle = onThemeToggle, 
+                    isDarkTheme = isDarkTheme,
+                    onThemeToggle = onThemeToggle,
                     isResolutionSelectionEnabled = isResolutionSelectionEnabled,
                     onResolutionSelectionChange = { 
                         permissionManager.setResolutionSelectionEnabled(it)
                         isResolutionSelectionEnabled = it
                     },
-                    viewModel = viewModel, 
+                    viewModel = viewModel,
                     context = context,
-                    onAboutClick = { showAboutScreen = true }
+                    onAboutClick = { showAboutScreen = true },
+                    onOpenBrowser = { url -> activeBrowserUrl = url },
+                    onOpenCookieManager = { showCookieManager = true },
+                    cookieRefreshTrigger = cookieRefreshTrigger
                 )
             }
         }
@@ -622,7 +645,7 @@ fun HomeContent(
         Button(
             onClick = {
                 if (isResolutionSelectionEnabled && needsAnalysis) {
-                    viewModel.analyzeUrl(url)
+                    viewModel.analyzeUrl(url, context.applicationContext)
                 } else {
                     if (hasStoragePermission) {
                         val qualityToDownload = if (isResolutionSelectionEnabled) selectedFormat else selectedLightningFormat
@@ -962,7 +985,10 @@ fun SettingsContent(
     onResolutionSelectionChange: (Boolean) -> Unit,
     viewModel: DownloaderViewModel,
     context: android.content.Context,
-    onAboutClick: () -> Unit
+    onAboutClick: () -> Unit,
+    onOpenBrowser: (String) -> Unit,
+    onOpenCookieManager: () -> Unit,
+    cookieRefreshTrigger: Int
 ) {
     val scrollState = rememberScrollState()
     val permissionManager = remember { PermissionManager(context) }
@@ -1062,6 +1088,54 @@ fun SettingsContent(
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
             ) { Text("Check", fontWeight = FontWeight.Bold) }
         }
+        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
+        
+        Text("Account Cookies & Web Browser", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text("Sign into any video website via In-App Browser to bypass bot checks, age limits, and private video restrictions.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
+        Spacer(modifier = Modifier.height(8.dp))
+
+        val savedDomains = remember(cookieRefreshTrigger) {
+            NetscapeCookieWriter.getAllSavedCookieDomains(context)
+        }
+
+        // Row 1: In-App Browser
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(painterResource(id = R.drawable.ic_browser), contentDescription = "Browser", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                Text("In-App Browser", color = MaterialTheme.colorScheme.onSurface)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Browse & sign into any platform", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
+            }
+            Button(
+                onClick = { onOpenBrowser("https://www.google.com") },
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+            ) { Text("Open", fontWeight = FontWeight.Bold) }
+        }
+
+        // Row 2: Cookie Manager
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(painterResource(id = R.drawable.ic_cookie), contentDescription = "Saved Cookies", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                Text("Saved Cookies", color = MaterialTheme.colorScheme.onSurface)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("${savedDomains.size} websites authenticated", color = if (savedDomains.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
+            }
+            Button(
+                onClick = onOpenCookieManager,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+            ) { Text("Manage", fontWeight = FontWeight.Bold) }
+        }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
         
@@ -1152,112 +1226,132 @@ fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: Dow
     val isFinished = downloadState is DownloadState.Success || downloadState is DownloadState.Error || downloadState is DownloadState.Cancelled
     val isDownloading = downloadState is DownloadState.Downloading
 
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+    val iconColor = when (downloadState) {
+        is DownloadState.Queued -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        is DownloadState.Downloading -> MaterialTheme.colorScheme.primary
+        is DownloadState.Success -> MaterialTheme.colorScheme.primary
+        is DownloadState.Error -> MaterialTheme.colorScheme.error
+        is DownloadState.Cancelled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+    }
+
+    val iconVector = when (downloadState) {
+        is DownloadState.Queued -> Icons.Filled.Info
+        is DownloadState.Downloading -> null
+        is DownloadState.Success -> Icons.Filled.Check
+        is DownloadState.Error -> Icons.Filled.Warning
+        is DownloadState.Cancelled -> Icons.Filled.Close
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Column {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val iconColor = when (downloadState) {
-                    is DownloadState.Queued -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    is DownloadState.Downloading -> MaterialTheme.colorScheme.primary
-                    is DownloadState.Success -> MaterialTheme.colorScheme.tertiary
-                    is DownloadState.Error -> MaterialTheme.colorScheme.error
-                    is DownloadState.Cancelled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                }
+        Box(
+            modifier = Modifier
+                .size(80.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (downloadState is DownloadState.Downloading) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_download),
+                    contentDescription = "Downloading",
+                    tint = iconColor,
+                    modifier = Modifier.size(32.dp)
+                )
+            } else {
+                Icon(
+                    imageVector = iconVector!!,
+                    contentDescription = "State Icon",
+                    tint = iconColor,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+        }
 
-                val iconVector = when (downloadState) {
-                    is DownloadState.Queued -> Icons.Filled.Info
-                    is DownloadState.Downloading -> null
-                    is DownloadState.Success -> Icons.Filled.Check
-                    is DownloadState.Error -> Icons.Filled.Warning
-                    is DownloadState.Cancelled -> Icons.Filled.Close
-                }
+        Spacer(modifier = Modifier.width(16.dp))
 
-                Box(
-                    modifier = Modifier
-                        .size(48.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (downloadState is DownloadState.Downloading) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_download),
-                            contentDescription = "Downloading",
-                            tint = iconColor,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    } else {
-                        Icon(
-                            imageVector = iconVector!!,
-                            contentDescription = "State Icon",
-                            tint = iconColor,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(16.dp))
-                
-                Column(modifier = Modifier.weight(1f)) {
-                    val (titleText, titleColor) = when (downloadState) {
-                        is DownloadState.Queued -> "Queued" to MaterialTheme.colorScheme.onSurface
-                        is DownloadState.Downloading -> "Downloading..." to MaterialTheme.colorScheme.primary
-                        is DownloadState.Success -> "Completed" to MaterialTheme.colorScheme.tertiary
-                        is DownloadState.Error -> "Failed" to MaterialTheme.colorScheme.error
-                        is DownloadState.Cancelled -> "Cancelled" to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    }
-                    
-                    Text(text = titleText, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = titleColor)
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(text = url, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                    
-                    if (isDownloading) {
-                        val state = downloadState as DownloadState.Downloading
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(text = state.status, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                    } else if (downloadState is DownloadState.Error) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(text = downloadState.message, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                
-                if (isFinished) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(onClick = { viewModel.resetState(url) }) {
-                        Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = MaterialTheme.colorScheme.onSurface)
-                    }
-                } else {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (isDownloading) {
-                            IconButton(onClick = { viewModel.pauseDownload(context.applicationContext, url) }) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.ic_pause),
-                                    contentDescription = "Pause",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                        IconButton(onClick = { viewModel.cancelDownload(context.applicationContext, url) }) {
-                            Icon(Icons.Filled.Close, contentDescription = "Cancel", tint = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
+        Column(modifier = Modifier.weight(1f)) {
+            val (titleText, titleColor) = when (downloadState) {
+                is DownloadState.Queued -> "Queued" to MaterialTheme.colorScheme.onSurface
+                is DownloadState.Downloading -> "Downloading..." to MaterialTheme.colorScheme.primary
+                is DownloadState.Success -> "Completed" to MaterialTheme.colorScheme.onSurface
+                is DownloadState.Error -> "Failed" to MaterialTheme.colorScheme.error
+                is DownloadState.Cancelled -> "Cancelled" to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
             }
 
-            // Edge to edge progress bar
+            Text(
+                text = titleText,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                lineHeight = 18.sp,
+                color = titleColor
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = url,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            )
+
             if (isDownloading) {
                 val state = downloadState as DownloadState.Downloading
+                Spacer(modifier = Modifier.height(4.dp))
                 LinearProgressIndicator(
                     progress = { state.progress },
-                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp)),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
                 )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = state.status,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                )
+            } else if (downloadState is DownloadState.Error) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = downloadState.message,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        if (isFinished) {
+            Spacer(modifier = Modifier.width(8.dp))
+            IconButton(onClick = { viewModel.resetState(url) }) {
+                Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            }
+        } else {
+            Spacer(modifier = Modifier.width(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isDownloading) {
+                    IconButton(onClick = { viewModel.pauseDownload(context.applicationContext, url) }) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_pause),
+                            contentDescription = "Pause",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                IconButton(onClick = { viewModel.cancelDownload(context.applicationContext, url) }) {
+                    Icon(Icons.Filled.Close, contentDescription = "Cancel", tint = MaterialTheme.colorScheme.error)
+                }
             }
         }
     }

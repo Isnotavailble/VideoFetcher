@@ -19,6 +19,31 @@ class PermissionManager(private val context: Context) {
     
     private val customUriKey = "custom_folder_uri"
     private val customPathKey = "custom_folder_path"
+    private val userAgentKey = "saved_user_agent"
+
+    companion object {
+        val DEFAULT_USER_AGENT: String get() = com.videofetcher.cookies.UserAgentManager.DESKTOP_USER_AGENT
+    }
+
+    fun getEffectiveUserAgent(): String {
+        return com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, "")
+    }
+
+    fun getUserAgentForDomain(domainKey: String): String {
+        return com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, domainKey)
+    }
+
+    fun saveUserAgentForDomain(domainKey: String, userAgent: String) {
+        com.videofetcher.cookies.UserAgentManager.saveUserAgentForDomain(context, domainKey, userAgent)
+    }
+
+    fun getUserAgent(): String {
+        return com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, "")
+    }
+
+    fun saveUserAgent(userAgent: String) {
+        com.videofetcher.cookies.UserAgentManager.saveUserAgentForDomain(context, "general", userAgent)
+    }
 
     fun isResolutionSelectionEnabled(): Boolean {
         return prefs.getBoolean("resolution_selection_enabled", false) // Default is Instant "Best Quality" Mode
