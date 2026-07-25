@@ -1,64 +1,211 @@
 package com.videofetcher.cookies
 
 import android.content.Context
+import android.net.Uri
+import android.os.Environment
+import android.provider.DocumentsContract
+import com.videofetcher.PermissionManager
 import java.io.File
+import java.net.URI
+
+data class CookieDomainInfo(
+    val domainKey: String,
+    val displayName: String,
+    val file: File,
+    val lastModified: Long,
+    val cookieCount: Int
+)
 
 object NetscapeCookieWriter {
 
     private const val HEADER = "# Netscape HTTP Cookie File\n# http://curl.haxx.se/rfc/cookie_spec.html\n# This is a generated file! Do not edit.\n\n"
 
     /**
-     * Maps an input URL or domain to one of the 4 supported platform keys:
-     * "youtube", "instagram", "facebook", "tiktok".
-     * Returns null if the URL does not belong to a supported platform.
+     * Dynamically extracts a clean primary domain key for ANY website URL or domain string.
      */
-    fun getPlatformKey(domainOrUrl: String): String? {
-        val lower = domainOrUrl.lowercase()
+    fun getDomainKey(domainOrUrl: String): String {
+        val lower = domainOrUrl.trim().lowercase()
         return when {
             lower.contains("youtube") || lower.contains("youtu.be") -> "youtube"
-            lower.contains("instagram") -> "instagram"
-            lower.contains("facebook") || lower.contains("fb.watch") -> "facebook"
+            lower.contains("instagram") || lower.contains("instagr.am") -> "instagram"
+            lower.contains("facebook") || lower.contains("fb.watch") || lower.contains("fb.com") -> "facebook"
             lower.contains("tiktok") -> "tiktok"
-            else -> null
+            lower.contains("twitter") || lower.contains("x.com") -> "twitter"
+            lower.contains("bilibili") -> "bilibili"
+            lower.contains("vimeo") -> "vimeo"
+            lower.contains("reddit") -> "reddit"
+            lower.contains("dailymotion") -> "dailymotion"
+            else -> extractGenericDomainKey(lower)
+        }
+    }
+
+    private fun extractGenericDomainKey(input: String): String {
+        return try {
+            val uriStr = if (!input.startsWith("http://") && !input.startsWith("https://")) {
+                "https://$input"
+            } else input
+            val host = URI(uriStr).host ?: input
+            val cleanHost = host.removePrefix("www.").removePrefix("m.").removePrefix("mobile.").removePrefix("touch.")
+            val parts = cleanHost.split(".")
+            if (parts.size >= 2) {
+                val candidate = parts[parts.size - 2]
+                if (candidate.length > 2) candidate else parts[0]
+            } else {
+                cleanHost.replace(Regex("[^a-z0-9]"), "")
+            }
+        } catch (e: Exception) {
+            input.replace(Regex("[^a-z0-9]"), "").take(20).ifEmpty { "unknown" }
         }
     }
 
     /**
-     * Gets the dedicated per-platform cookie file in app private directory context.filesDir.
-     * Example: youtube_cookies.txt, instagram_cookies.txt, facebook_cookies.txt, tiktok_cookies.txt
+     * Resolves the persistent backup directory (.cookies inside VideoFetcher download folder).
      */
-    fun getCookieFile(context: Context, platformKey: String): File {
-        return File(context.filesDir, "${platformKey}_cookies.txt")
+    fun getPersistentBackupDir(context: Context): File {
+        val permissionManager = PermissionManager(context)
+        val customPath = permissionManager.getCustomDownloadFolderPath()
+        val backupDir = File(customPath, ".cookies")
+        try {
+            if (!backupDir.exists()) backupDir.mkdirs()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return backupDir
     }
 
     /**
-     * Checks whether the raw cookies contain valid authenticated session tokens for the target platform.
+     * Restores surviving cookie files from SAF Tree Uri if direct File access was blocked after app reinstall.
      */
-    fun hasAuthTokens(platformKey: String, rawCookieString: String): Boolean {
+    fun restoreFromSafTreeUri(context: Context, treeUri: Uri): Boolean {
+        var restoredAny = false
+        try {
+            val contentResolver = context.contentResolver
+            val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+            val cookiesDocId = "$treeDocumentId/.cookies"
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, cookiesDocId)
+
+            val projection = arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_SIZE
+            )
+
+            contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val sizeCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE)
+
+                while (cursor.moveToNext()) {
+                    val docId = cursor.getString(idCol)
+                    val name = cursor.getString(nameCol)
+                    val size = cursor.getLong(sizeCol)
+
+                    if (!name.isNullOrBlank() && name.endsWith("_cookies.txt") && size > HEADER.length) {
+                        val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                        val targetFile = File(context.filesDir, name)
+                        contentResolver.openInputStream(fileUri)?.use { inputStream ->
+                            targetFile.outputStream().use { outputStream ->
+                                inputStream.copyTo(outputStream)
+                            }
+                            restoredAny = true
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return restoredAny
+    }
+
+    /**
+     * Restores surviving cookie files from the .cookies backup folder into context.filesDir after app reinstall.
+     */
+    fun restoreAllBackupsToPrivateStorage(context: Context) {
+        // 1. Direct File access
+        try {
+            val backupDir = getPersistentBackupDir(context)
+            if (backupDir.exists() && backupDir.isDirectory) {
+                val files = backupDir.listFiles()
+                if (files != null) {
+                    for (file in files) {
+                        if (file.isFile && file.name.endsWith("_cookies.txt") && file.length() > HEADER.length) {
+                            val targetFile = File(context.filesDir, file.name)
+                            if (!targetFile.exists() || targetFile.length() < file.length()) {
+                                file.copyTo(targetFile, overwrite = true)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 2. SAF Tree URI access if direct File.listFiles() was blocked after reinstall
+        try {
+            val permissionManager = PermissionManager(context)
+            val safUri = permissionManager.getCustomDownloadFolderUri() ?: permissionManager.getSavedFolderUri()
+            if (safUri != null) {
+                restoreFromSafTreeUri(context, safUri)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * Gets the dedicated cookie file in app private directory context.filesDir.
+     * Automatically restores from the .cookies backup folder if missing in filesDir.
+     */
+    fun getCookieFile(context: Context, domainKey: String): File {
+        restoreAllBackupsToPrivateStorage(context)
+        return File(context.filesDir, "${domainKey}_cookies.txt")
+    }
+
+    private fun syncToBackup(context: Context, domainKey: String, sourcePrivateFile: File) {
+        try {
+            val backupDir = getPersistentBackupDir(context)
+            val backupFile = File(backupDir, "${domainKey}_cookies.txt")
+            if (sourcePrivateFile.exists() && sourcePrivateFile.length() > 0) {
+                sourcePrivateFile.copyTo(backupFile, overwrite = true)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * Validates whether a raw cookie string contains non-empty session cookies.
+     */
+    fun hasAuthTokens(domainKey: String, rawCookieString: String): Boolean {
         if (rawCookieString.isBlank()) return false
-        val lowerCookies = rawCookieString.lowercase()
-        return when (platformKey) {
-            "youtube" -> lowerCookies.contains("sapisid") || lowerCookies.contains("sid") || lowerCookies.contains("login_info")
-            "instagram" -> lowerCookies.contains("sessionid") || lowerCookies.contains("ds_user_id")
-            "facebook" -> lowerCookies.contains("c_user") || lowerCookies.contains("xs")
-            "tiktok" -> lowerCookies.contains("sessionid")
-            else -> false
+        val lower = rawCookieString.lowercase()
+        return when (domainKey) {
+            "youtube" -> lower.contains("sapisid") || lower.contains("sid") || lower.contains("login_info")
+            "instagram" -> lower.contains("sessionid") || lower.contains("ds_user_id")
+            "facebook" -> lower.contains("c_user") || lower.contains("xs")
+            "tiktok" -> lower.contains("sessionid")
+            "twitter" -> lower.contains("auth_token") || lower.contains("ct0")
+            else -> lower.lines().any { line ->
+                val trimmed = line.trim()
+                trimmed.isNotBlank() && !trimmed.startsWith("#") && trimmed.split("\t").size >= 6
+            } || rawCookieString.contains("=")
         }
     }
 
     /**
      * Converts raw cookies from CookieManager into Netscape HTTP Cookie format
-     * and saves them to the platform's dedicated cookie file (e.g. youtube_cookies.txt).
+     * and saves to domain_cookies.txt (both private storage and .cookies backup).
      */
-    fun writeCookies(context: Context, domain: String, rawCookieString: String): Boolean {
-        val platformKey = getPlatformKey(domain) ?: return false
-        if (!hasAuthTokens(platformKey, rawCookieString)) return false
+    fun writeCookies(context: Context, domainOrUrl: String, rawCookieString: String): Boolean {
+        val domainKey = getDomainKey(domainOrUrl)
+        if (!hasAuthTokens(domainKey, rawCookieString)) return false
 
         try {
-            val file = getCookieFile(context, platformKey)
+            val file = getCookieFile(context, domainKey)
             val cookieMap = mutableMapOf<String, String>()
 
-            // 1. Read existing lines if cookie file already exists
             if (file.exists()) {
                 file.readLines().forEach { line ->
                     val trimmed = line.trim()
@@ -73,8 +220,11 @@ object NetscapeCookieWriter {
                 }
             }
 
-            // 2. Parse new raw cookie string (Format: name1=val1; name2=val2; ...)
-            val targetDomain = if (domain.startsWith(".")) domain else ".$domain"
+            val targetDomain = if (domainOrUrl.contains(".")) {
+                val clean = domainOrUrl.substringAfter("://").substringBefore("/")
+                if (clean.startsWith(".")) clean else ".$clean"
+            } else ".${domainKey}.com"
+
             val newPairs = rawCookieString.split(";")
             for (pair in newPairs) {
                 val trimmedPair = pair.trim()
@@ -85,15 +235,14 @@ object NetscapeCookieWriter {
                 val value = trimmedPair.substring(eqIdx + 1).trim()
 
                 if (name.isNotBlank()) {
-                    // Expiration set 10 years in the future
                     val expiration = (System.currentTimeMillis() / 1000) + 315360000L
                     val netscapeLine = "$targetDomain\tTRUE\t/\tTRUE\t$expiration\t$name\t$value"
                     cookieMap["$targetDomain:$name"] = netscapeLine
                 }
             }
 
-            // 3. Write all merged cookies to platform_cookies.txt
             file.writeText(HEADER + cookieMap.values.joinToString("\n") + "\n")
+            syncToBackup(context, domainKey, file)
             return true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -102,46 +251,78 @@ object NetscapeCookieWriter {
     }
 
     /**
-     * Checks if valid authenticated cookies exist for a specific platform domain.
-     */
-    fun hasCookiesForPlatform(context: Context, domain: String): Boolean {
-        val platformKey = getPlatformKey(domain) ?: return false
-        val file = getCookieFile(context, platformKey)
-        if (!file.exists() || file.length() <= HEADER.length) return false
-        return try {
-            val text = file.readText().lowercase()
-            hasAuthTokens(platformKey, text)
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /**
-     * Resolves the input URL's platform and returns its dedicated cookie file ONLY IF the user
-     * has authenticated cookies for that specific platform.
-     * Returns null if unauthenticated or not logged in for that platform.
+     * Resolves the input URL's domain key and returns its cookie file if authenticated session tokens exist.
      */
     fun getCookieFileForUrl(context: Context, inputUrl: String): File? {
-        val platformKey = getPlatformKey(inputUrl) ?: return null
-        val file = getCookieFile(context, platformKey)
+        val domainKey = getDomainKey(inputUrl)
+        val file = getCookieFile(context, domainKey)
         if (!file.exists() || file.length() <= HEADER.length) return null
 
         return try {
             val text = file.readText().lowercase()
-            if (hasAuthTokens(platformKey, text)) file else null
+            if (hasAuthTokens(domainKey, text)) file else null
         } catch (e: Exception) {
             null
         }
     }
 
     /**
-     * Clears all per-platform cookie files.
+     * Restores backups from .cookies then lists all saved cookie domain files from private storage.
+     */
+    fun getAllSavedCookieDomains(context: Context): List<CookieDomainInfo> {
+        restoreAllBackupsToPrivateStorage(context)
+        val result = mutableMapOf<String, CookieDomainInfo>()
+
+        if (context.filesDir.exists() && context.filesDir.isDirectory) {
+            val files = context.filesDir.listFiles()
+            if (files != null) {
+                for (file in files) {
+                    if (file.isFile && file.name.endsWith("_cookies.txt") && file.length() > HEADER.length) {
+                        val key = file.name.removeSuffix("_cookies.txt")
+                        val lines = try { file.readLines().filter { it.isNotBlank() && !it.startsWith("#") } } catch (e: Exception) { emptyList() }
+                        if (lines.isNotEmpty()) {
+                            val displayName = key.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() } + ".com"
+                            result[key] = CookieDomainInfo(
+                                domainKey = key,
+                                displayName = displayName,
+                                file = file,
+                                lastModified = file.lastModified(),
+                                cookieCount = lines.size
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        return result.values.sortedByDescending { it.lastModified }
+    }
+
+    /**
+     * Deletes a cookie file from both private app storage and the .cookies backup folder.
+     */
+    fun deleteCookieFile(context: Context, domainKey: String): Boolean {
+        var deleted = false
+        try {
+            val privateFile = File(context.filesDir, "${domainKey}_cookies.txt")
+            if (privateFile.exists() && privateFile.delete()) deleted = true
+
+            val backupDir = getPersistentBackupDir(context)
+            val backupFile = File(backupDir, "${domainKey}_cookies.txt")
+            if (backupFile.exists() && backupFile.delete()) deleted = true
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return deleted
+    }
+
+    /**
+     * Clears all saved cookie files.
      */
     fun clearAllCookies(context: Context): Boolean {
         var deletedAny = false
-        listOf("youtube", "instagram", "facebook", "tiktok").forEach { key ->
-            val file = getCookieFile(context, key)
-            if (file.exists() && file.delete()) {
+        getAllSavedCookieDomains(context).forEach { info ->
+            if (deleteCookieFile(context, info.domainKey)) {
                 deletedAny = true
             }
         }
