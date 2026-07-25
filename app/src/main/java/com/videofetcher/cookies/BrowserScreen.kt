@@ -300,12 +300,15 @@ fun BrowserScreen(
                             builtInZoomControls = true
                             displayZoomControls = false
                             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                            userAgentString = "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                            userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
                         }
 
                         val cookieManager = CookieManager.getInstance()
                         cookieManager.setAcceptCookie(true)
                         cookieManager.setAcceptThirdPartyCookies(this, true)
+
+                        // Pre-inject saved Netscape session cookies so WebView opens directly logged into Facebook/Instagram
+                        NetscapeCookieWriter.injectCookiesIntoCookieManager(ctx, initialUrl)
 
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -314,6 +317,7 @@ fun BrowserScreen(
                                 url?.let {
                                     currentUrl = it
                                     urlInputText = it
+                                    NetscapeCookieWriter.injectCookiesIntoCookieManager(ctx, it)
                                 }
                             }
 

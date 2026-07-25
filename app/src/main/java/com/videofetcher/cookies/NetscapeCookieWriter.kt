@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
+import android.webkit.CookieManager
 import com.videofetcher.PermissionManager
 import java.io.File
 import java.net.URI
@@ -71,6 +72,42 @@ object NetscapeCookieWriter {
             e.printStackTrace()
         }
         return backupDir
+    }
+
+    /**
+     * Pre-injects a saved Netscape cookie file into Android's native WebView CookieManager.
+     */
+    fun injectCookiesIntoCookieManager(context: Context, domainOrUrl: String) {
+        val domainKey = getDomainKey(domainOrUrl)
+        val file = getCookieFile(context, domainKey)
+        if (!file.exists() || file.length() <= HEADER.length) return
+
+        try {
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.setAcceptCookie(true)
+
+            file.readLines().forEach { line ->
+                val trimmed = line.trim()
+                if (trimmed.isNotBlank() && !trimmed.startsWith("#")) {
+                    val parts = trimmed.split("\t")
+                    if (parts.size >= 7) {
+                        val rawDomain = parts[0]
+                        val path = parts[2]
+                        val name = parts[5]
+                        val value = parts[6]
+
+                        val cleanDomain = rawDomain.removePrefix(".")
+                        val cookieString = "$name=$value; Domain=.$cleanDomain; Path=$path"
+                        cookieManager.setCookie("https://$cleanDomain", cookieString)
+                        cookieManager.setCookie("https://www.$cleanDomain", cookieString)
+                        cookieManager.setCookie("https://m.$cleanDomain", cookieString)
+                    }
+                }
+            }
+            cookieManager.flush()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     /**
