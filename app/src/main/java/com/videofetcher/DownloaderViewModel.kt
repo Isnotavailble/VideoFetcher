@@ -171,6 +171,9 @@ class DownloaderViewModel : ViewModel() {
                     val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, url)
                     if (platformCookieFile != null) {
                         request.addOption("--cookies", platformCookieFile.absolutePath)
+                        // Auto-retry session challenges when downloading with cookies to guarantee first-attempt success
+                        request.addOption("--retries", "3")
+                        request.addOption("--fragment-retries", "5")
                     }
                 }
                 

@@ -107,6 +107,9 @@ class DownloadService : Service() {
                 val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, url)
                 if (platformCookieFile != null) {
                     request.addOption("--cookies", platformCookieFile.absolutePath)
+                    // Auto-retry session challenges when downloading with cookies to guarantee first-attempt success
+                    request.addOption("--retries", "3")
+                    request.addOption("--fragment-retries", "5")
                 }
                 
                 // Force IPv4 to prevent 15-30s timeout hangs on mobile network IPv6 addresses
@@ -160,7 +163,8 @@ class DownloadService : Service() {
                 }
                 request.addOption("--restrict-filenames")
                 request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}_vdf.%(ext)s")
-                request.addOption("--concurrent-fragments", "4")
+                request.addOption("--concurrent-fragments", "1")
+                request.addOption("--http-chunk-size", "10M")
 
                 var mergeStarted = false
                 var lastUpdateTime = 0L
