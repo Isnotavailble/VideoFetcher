@@ -1,6 +1,9 @@
 package com.videofetcher.cookies
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,9 +22,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import com.videofetcher.PermissionManager
 import com.videofetcher.R
 import java.text.SimpleDateFormat
@@ -42,6 +42,7 @@ fun CookieManagementScreen(
 
     var domainToDelete by remember { mutableStateOf<CookieDomainInfo?>(null) }
     var showClearAllDialog by remember { mutableStateOf(false) }
+    var isWarningVisible by remember { mutableStateOf(true) }
 
     val permissionManager = remember { PermissionManager(context) }
     val folderPickerLauncher = rememberLauncherForActivityResult(
@@ -107,11 +108,57 @@ fun CookieManagementScreen(
             )
         }
     ) { paddingValues ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            // Security Warning Banner Card right below header row
+            if (isWarningVisible) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_warning),
+                            contentDescription = "Warning",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Please keep your cookie file private and do not share this file. This file contains login session of your account.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
+                        )
+                        IconButton(
+                            onClick = { isWarningVisible = false },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Text(
+                                text = "✕",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                }
+            }
+
             if (savedDomains.isEmpty()) {
                 Column(
                     modifier = Modifier

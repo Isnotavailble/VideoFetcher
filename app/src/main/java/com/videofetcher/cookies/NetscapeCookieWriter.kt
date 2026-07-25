@@ -156,11 +156,13 @@ object NetscapeCookieWriter {
 
     /**
      * Gets the dedicated cookie file in app private directory context.filesDir.
-     * Automatically restores from the .cookies backup folder if missing in filesDir.
      */
     fun getCookieFile(context: Context, domainKey: String): File {
-        restoreAllBackupsToPrivateStorage(context)
-        return File(context.filesDir, "${domainKey}_cookies.txt")
+        val privateFile = File(context.filesDir, "${domainKey}_cookies.txt")
+        if (!privateFile.exists() || privateFile.length() <= HEADER.length) {
+            restoreAllBackupsToPrivateStorage(context)
+        }
+        return privateFile
     }
 
     private fun syncToBackup(context: Context, domainKey: String, sourcePrivateFile: File) {
@@ -203,7 +205,7 @@ object NetscapeCookieWriter {
         if (!hasAuthTokens(domainKey, rawCookieString)) return false
 
         try {
-            val file = getCookieFile(context, domainKey)
+            val file = File(context.filesDir, "${domainKey}_cookies.txt")
             val cookieMap = mutableMapOf<String, String>()
 
             if (file.exists()) {
@@ -267,10 +269,9 @@ object NetscapeCookieWriter {
     }
 
     /**
-     * Restores backups from .cookies then lists all saved cookie domain files from private storage.
+     * Lists all saved cookie domain files from internal app private storage.
      */
     fun getAllSavedCookieDomains(context: Context): List<CookieDomainInfo> {
-        restoreAllBackupsToPrivateStorage(context)
         val result = mutableMapOf<String, CookieDomainInfo>()
 
         if (context.filesDir.exists() && context.filesDir.isDirectory) {
@@ -299,25 +300,20 @@ object NetscapeCookieWriter {
     }
 
     /**
-     * Deletes a cookie file from both private app storage and the .cookies backup folder.
+     * Deletes a cookie file from app private internal storage ONLY.
      */
     fun deleteCookieFile(context: Context, domainKey: String): Boolean {
-        var deleted = false
-        try {
+        return try {
             val privateFile = File(context.filesDir, "${domainKey}_cookies.txt")
-            if (privateFile.exists() && privateFile.delete()) deleted = true
-
-            val backupDir = getPersistentBackupDir(context)
-            val backupFile = File(backupDir, "${domainKey}_cookies.txt")
-            if (backupFile.exists() && backupFile.delete()) deleted = true
+            if (privateFile.exists()) privateFile.delete() else false
         } catch (e: Exception) {
             e.printStackTrace()
+            false
         }
-        return deleted
     }
 
     /**
-     * Clears all saved cookie files.
+     * Clears all saved cookie files from app private internal storage.
      */
     fun clearAllCookies(context: Context): Boolean {
         var deletedAny = false
