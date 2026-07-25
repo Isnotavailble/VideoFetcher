@@ -6,6 +6,8 @@ import android.graphics.Bitmap
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -54,6 +56,11 @@ fun BrowserScreen(
 
     val activeDomainKey = remember(currentUrl) {
         NetscapeCookieWriter.getDomainKey(currentUrl)
+    }
+
+    // Helper to create clean headers without X-Requested-With
+    fun getCleanHeaders(): Map<String, String> {
+        return mapOf("X-Requested-With" to "")
     }
 
     Scaffold(
@@ -185,7 +192,7 @@ fun BrowserScreen(
                                 if (!target.startsWith("http://") && !target.startsWith("https://")) {
                                     target = if (target.contains(".")) "https://$target" else "https://www.google.com/search?q=$target"
                                 }
-                                webViewInstance?.loadUrl(target)
+                                webViewInstance?.loadUrl(target, getCleanHeaders())
                             })
                         )
                     }
@@ -262,7 +269,7 @@ fun BrowserScreen(
 
                             val hasAuth = NetscapeCookieWriter.hasAuthTokens(activeDomainKey, combinedCookies)
                             if (hasAuth) {
-                                 val liveUserAgent = webViewInstance?.settings?.userAgentString ?: ""
+                                val liveUserAgent = webViewInstance?.settings?.userAgentString ?: ""
                                 val permissionManager = PermissionManager(context)
                                 if (liveUserAgent.isNotBlank()) {
                                     permissionManager.saveUserAgentForDomain(activeDomainKey, liveUserAgent)
@@ -301,37 +308,38 @@ fun BrowserScreen(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
-                        val permissionManager = PermissionManager(ctx)
                         val domainKey = NetscapeCookieWriter.getDomainKey(initialUrl)
-                        val domainUserAgent = permissionManager.getUserAgentForDomain(domainKey)
+                        val domainUserAgent = UserAgentManager.getBrowserUserAgentForDomain(ctx, domainKey)
 
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
                             databaseEnabled = true
-                            useWideViewPort = true
-                            loadWithOverviewMode = true
+                            
+                            // Prevent zoomed desktop viewports
+                            useWideViewPort = false
+                            loadWithOverviewMode = false
+                            
                             setSupportZoom(true)
                             builtInZoomControls = true
                             displayZoomControls = false
                             mediaPlaybackRequiresUserGesture = false
                             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                            
                             if (!domainUserAgent.isNullOrBlank()) {
                                 userAgentString = domainUserAgent
                             }
                         }
 
-                        // Save current User-Agent via UserAgentManager
                         val extractedUserAgent = settings.userAgentString
                         if (!extractedUserAgent.isNullOrBlank()) {
-                            com.videofetcher.cookies.UserAgentManager.saveUserAgentForDomain(ctx, activeDomainKey, extractedUserAgent)
+                            UserAgentManager.saveUserAgentForDomain(ctx, activeDomainKey, extractedUserAgent)
                         }
 
                         val cookieManager = CookieManager.getInstance()
                         cookieManager.setAcceptCookie(true)
                         cookieManager.setAcceptThirdPartyCookies(this, true)
 
-                        // Pre-inject saved Netscape session cookies so WebView opens directly logged into Facebook/Instagram
                         NetscapeCookieWriter.injectCookiesIntoCookieManager(ctx, initialUrl)
 
                         webViewClient = object : WebViewClient() {
@@ -342,6 +350,35 @@ fun BrowserScreen(
                                     currentUrl = it
                                     urlInputText = it
                                 }
+
+                                // Scrub WebView JS flags before Google's sign-in scripts execute
+                                view?.evaluateJavascript(
+                                    """
+                                    delete window.Android;
+                                    if (navigator.userAgentData) {
+                                        Object.defineProperty(navigator, 'userAgentData', {
+                                            get: () => undefined
+                                        });
+                                    }
+                                    """.trimIndent(), null
+                                )
+                            }
+
+                            override fun shouldInterceptRequest(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): WebResourceResponse? {
+                                val headers = request?.requestHeaders?.toMutableMap() ?: mutableMapOf()
+
+                                // Remove app package identifier header to pass Google's security check
+                                if (headers.containsKey("X-Requested-With")) {
+                                    headers.remove("X-Requested-With")
+                                }
+                                if (headers.containsKey("x-requested-with")) {
+                                    headers.remove("x-requested-with")
+                                }
+
+                                return super.shouldInterceptRequest(view, request)
                             }
 
                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -367,7 +404,7 @@ fun BrowserScreen(
                             }
                         }
 
-                        loadUrl(initialUrl)
+                        loadUrl(initialUrl, getCleanHeaders())
                         webViewInstance = this
                     }
                 },
