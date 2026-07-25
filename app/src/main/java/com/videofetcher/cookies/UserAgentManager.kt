@@ -25,9 +25,9 @@ object UserAgentManager {
     }
 
     /**
-     * Resolves the effective User-Agent to pass to yt-dlp based on platform policy and saved preferences.
+     * Resolves the User-Agent for WebView login to match yt-dlp policy.
      */
-    fun getEffectiveUserAgentForDomain(context: Context, domainKey: String): String {
+    fun getBrowserUserAgentForDomain(context: Context, domainKey: String): String {
         val cleanKey = domainKey.lowercase()
         if (requiresDesktopUserAgent(cleanKey)) {
             return DESKTOP_USER_AGENT
@@ -41,16 +41,26 @@ object UserAgentManager {
     }
 
     /**
+     * Resolves the effective User-Agent to pass to yt-dlp based on platform policy and saved preferences.
+     */
+    fun getEffectiveUserAgentForDomain(context: Context, domainKey: String): String {
+        return getBrowserUserAgentForDomain(context, domainKey)
+    }
+
+    /**
      * Saves domain-specific User-Agent and backs it up into .useragent/ folder.
+     * Enforces Desktop UA policy if required by the target platform.
      */
     fun saveUserAgentForDomain(context: Context, domainKey: String, userAgent: String) {
-        if (userAgent.isBlank() || domainKey.isBlank()) return
+        if (domainKey.isBlank()) return
         val cleanKey = domainKey.lowercase()
+        val targetUA = if (requiresDesktopUserAgent(cleanKey)) DESKTOP_USER_AGENT else userAgent.ifBlank { MOBILE_USER_AGENT }
+
         getPrefs(context).edit {
-            putString("user_agent_$cleanKey", userAgent)
-            putString(KEY_SAVED_USER_AGENT, userAgent)
+            putString("user_agent_$cleanKey", targetUA)
+            putString(KEY_SAVED_USER_AGENT, targetUA)
         }
-        syncUserAgentToBackup(context, cleanKey, userAgent)
+        syncUserAgentToBackup(context, cleanKey, targetUA)
     }
 
     /**
@@ -58,6 +68,7 @@ object UserAgentManager {
      */
     fun syncUserAgentToBackup(context: Context, domainKey: String, userAgent: String) {
         val cleanKey = domainKey.lowercase()
+        val targetUA = if (requiresDesktopUserAgent(cleanKey)) DESKTOP_USER_AGENT else userAgent
         try {
             val permissionManager = PermissionManager(context)
             val customPath = permissionManager.getCustomDownloadFolderPath()
@@ -65,7 +76,7 @@ object UserAgentManager {
             if (!backupFolder.exists()) backupFolder.mkdirs()
 
             val backupFile = File(backupFolder, "useragent_$cleanKey.txt")
-            backupFile.writeText(userAgent)
+            backupFile.writeText(targetUA)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -73,6 +84,7 @@ object UserAgentManager {
 
     /**
      * Restores all useragent_<domainKey>.txt backups from .useragent/ into SharedPreferences.
+     * Overwrites platform policy overrides (e.g. Facebook Desktop UA) automatically.
      */
     fun restoreAllUserAgentsToPrivateStorage(context: Context) {
         try {
@@ -82,12 +94,15 @@ object UserAgentManager {
             if (backupFolder.exists() && backupFolder.isDirectory) {
                 backupFolder.listFiles()?.forEach { file ->
                     if (file.name.startsWith("useragent_") && file.name.endsWith(".txt")) {
-                        val domainKey = file.name.removePrefix("useragent_").removeSuffix(".txt")
-                        val ua = file.readText().trim()
+                        val domainKey = file.name.removePrefix("useragent_").removeSuffix(".txt").lowercase()
+                        val ua = if (requiresDesktopUserAgent(domainKey)) DESKTOP_USER_AGENT else file.readText().trim()
                         if (ua.isNotBlank() && domainKey.isNotBlank()) {
                             getPrefs(context).edit {
                                 putString("user_agent_$domainKey", ua)
                                 putString(KEY_SAVED_USER_AGENT, ua)
+                            }
+                            if (requiresDesktopUserAgent(domainKey)) {
+                                file.writeText(DESKTOP_USER_AGENT)
                             }
                         }
                     }

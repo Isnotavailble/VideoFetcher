@@ -158,12 +158,13 @@ class DownloadService : Service() {
                 if (quality != "Best Quality (M4A)" && !quality.startsWith("Audio (MP3)")) {
                     request.addOption("--merge-output-format", "mp4")
                 }
+                val initialFiles = targetDir.listFiles()?.map { it.absolutePath }?.toSet() ?: emptySet()
                 request.addOption("--restrict-filenames")
-                request.addOption("-o", "${targetDir.absolutePath}/%(title)s_${resolutionSignature}_vdf.%(ext)s")
+                request.addOption("-o", "${targetDir.absolutePath}/%(title,id,uuid)s_${resolutionSignature}_vdf.%(ext)s")
                 request.addOption("--concurrent-fragments", "1")
                 request.addOption("--http-chunk-size", "10M")
 
-                var mergeStarted = false
+                var downloadFinished = false
                 var lastUpdateTime = 0L
                 var lastProgress = -1f
 
@@ -173,12 +174,13 @@ class DownloadService : Service() {
                             return@execute
                         }
 
-                        val isConverting = line.contains("[ffmpeg]") || line.contains("Merging") || progress >= 100f
-                        if (isConverting) mergeStarted = true
+                        val isFinishedDownload = line.contains("[download] 100%") || line.contains("100% of") || progress >= 100f
+                        val isConverting = line.contains("[ffmpeg]") || line.contains("Merging")
+                        if (isFinishedDownload) downloadFinished = true
 
                         val currentTime = System.currentTimeMillis()
 
-                        if (isConverting || progress >= 100f || (currentTime - lastUpdateTime > 500 && progress != lastProgress)) {
+                        if (isConverting || isFinishedDownload || (currentTime - lastUpdateTime > 500 && progress != lastProgress)) {
                             lastUpdateTime = currentTime
                             lastProgress = progress
 
@@ -202,36 +204,39 @@ class DownloadService : Service() {
                         !isActive || postEx.message?.contains("Process destroyed") == true -> {
                             // Cancelled – do nothing
                         }
-                        mergeStarted -> {
-                            // Download + merge already completed before this exception.
-                            // It is FFmpeg stderr noise (thumbnail embed warning, temp file
-                            // cleanup, etc.). Treat as success – fall through to success block.
+                        downloadFinished -> {
+                            // Download finished before FFmpeg post-processing cleanup log
                         }
                         else -> {
-                            // Exception thrown before merge started = genuine download failure.
                             throw postEx
                         }
                     }
                 }
 
                 if (isActive) {
-                    DownloadManager.updateDownloadState(url, DownloadState.Success("Video successfully saved!"))
+                    // Verify new file created during this job exists on disk
+                    val matchingFile = targetDir.listFiles()?.firstOrNull { it.absolutePath !in initialFiles && it.name.contains("_vdf.") && it.length() > 0 }
+                    if (downloadFinished && matchingFile != null && matchingFile.exists()) {
+                        DownloadManager.updateDownloadState(url, DownloadState.Success("Video successfully saved!"))
 
-                    val successNotification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
-                        .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                        .setContentTitle("Video Downloaded")
-                        .setContentText("Successfully saved to ${targetDir.name}")
-                        .build()
-                    notificationManager.notify(notificationId + 1, successNotification)
-                    notificationManager.cancel(notificationId)
+                        val successNotification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
+                            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                            .setContentTitle("Video Downloaded")
+                            .setContentText("Successfully saved to ${targetDir.name}")
+                            .build()
+                        notificationManager.notify(notificationId + 1, successNotification)
+                        notificationManager.cancel(notificationId)
 
-                    // Trigger MediaStore scan via absolute path so gallery sees the file
-                    val scanPath = "${targetDir.absolutePath}"
-                    MediaScannerConnection.scanFile(
-                        applicationContext,
-                        arrayOf(scanPath),
-                        null
-                    ) { _, _ -> DownloadManager.triggerFileRefresh() }
+                        // Trigger MediaStore scan via absolute path so gallery sees the file
+                        val scanPath = matchingFile.absolutePath
+                        MediaScannerConnection.scanFile(
+                            applicationContext,
+                            arrayOf(scanPath),
+                            null
+                        ) { _, _ -> DownloadManager.triggerFileRefresh() }
+                    } else {
+                        throw Exception("Download file not found on disk after completion.")
+                    }
                 }
 
             } catch (e: Exception) {

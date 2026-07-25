@@ -216,7 +216,9 @@ fun CookieManagementScreen(
         AlertDialog(
             onDismissRequest = { domainToDelete = null },
             title = { Text("Delete Cookie Session?") },
-            text = { Text("Are you sure you want to delete saved cookies for ${domainToDelete?.displayName}? You may need to sign in again for private downloads.") },
+            text = { 
+                Text("Are you sure you want to remove active cookies for ${domainToDelete?.displayName} from app storage?\n\nNote: Backup files in your Download folder (.cookies/ & .useragent/) are preserved and not destroyed. If you wish to delete backup files, you must manually delete them using a File Manager.") 
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -243,7 +245,9 @@ fun CookieManagementScreen(
         AlertDialog(
             onDismissRequest = { showClearAllDialog = false },
             title = { Text("Clear All Saved Cookies?") },
-            text = { Text("This will remove all stored cookie files. Your downloaded videos will not be affected.") },
+            text = { 
+                Text("Are you sure you want to clear all active cookie sessions from app storage?\n\nNote: Backup files in your Download folder (.cookies/ & .useragent/) are preserved and not destroyed. If you wish to delete backup files, you must manually delete them using a File Manager.") 
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
