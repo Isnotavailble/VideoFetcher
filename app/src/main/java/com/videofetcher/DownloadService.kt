@@ -16,6 +16,7 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
@@ -82,13 +83,10 @@ class DownloadService : Service() {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             
             try {
-                // SAFETY NET: Ensure engine is initialized before attempting download.
-                // This takes a few seconds on first launch, but is nearly instant on subsequent runs.
-                try {
-                    YoutubeDL.getInstance().init(applicationContext)
-                    FFmpeg.getInstance().init(applicationContext)
-                } catch (e: Exception) {
-                    throw Exception("Failed to initialize engine: ${e.message}")
+                // Non-blocking suspend until engine is fully loaded or error
+                val currentEngineState = DownloadManager.engineState.first { it !is EngineState.Initializing }
+                if (currentEngineState is EngineState.Error) {
+                    throw Exception("Engine is not ready: ${currentEngineState.message}")
                 }
 
                 val permissionManager = PermissionManager(applicationContext)
@@ -96,10 +94,15 @@ class DownloadService : Service() {
                 val targetDir = File(customPath)
                 if (!targetDir.exists()) targetDir.mkdirs()
 
-                val request = YoutubeDLRequest(url)
+                val cleanUrl = try {
+                    android.net.Uri.parse(url).buildUpon().clearQuery().build().toString()
+                } catch (e: Exception) {
+                    url
+                }
+                val request = YoutubeDLRequest(cleanUrl)
                 
-                val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(url)
-                val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, url)
+                val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl)
+                val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, cleanUrl)
                 if (platformCookieFile != null) {
                     request.addOption("--cookies", platformCookieFile.absolutePath)
                     val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(applicationContext, domainKey)
@@ -112,7 +115,9 @@ class DownloadService : Service() {
                 request.addOption("--no-playlist")
                 request.addOption("--no-warnings")
                 request.addOption("--buffer-size", "64K")
-                request.addOption("--force-ipv4")
+                if (domainKey.lowercase() != "instagram") {
+                    request.addOption("--force-ipv4")
+                }
 
                 // User Preference Speed Toggles
                 if (permissionManager.isBypassSslEnabled()) {
@@ -169,14 +174,13 @@ class DownloadService : Service() {
                     request.addOption("--merge-output-format", "mp4")
                 }
                 val initialFiles = targetDir.listFiles()?.map { it.absolutePath }?.toSet() ?: emptySet()
-                request.addOption("--restrict-filenames")
+                request.addOption("--trim-filenames", "80")
                 request.addOption("-o", "${targetDir.absolutePath}/%(title,id,uuid)s_${resolutionSignature}_vdf.%(ext)s")
                 request.addOption("--concurrent-fragments", "1")
                 request.addOption("--http-chunk-size", "10M")
 
                 var downloadFinished = false
                 var lastUpdateTime = 0L
-                var lastProgress = -1f
 
                 try {
                     YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
@@ -193,7 +197,6 @@ class DownloadService : Service() {
 
                         if (isConverting || isFinishedDownload || trimmedLine.isNotEmpty() || (currentTime - lastUpdateTime > 200)) {
                             lastUpdateTime = currentTime
-                            lastProgress = progress
 
                             val statusText = if (trimmedLine.isNotEmpty()) {
                                 if (progress > 0f && !isConverting) {

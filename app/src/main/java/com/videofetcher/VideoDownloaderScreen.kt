@@ -177,8 +177,6 @@ fun VideoDownloaderUI(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.initializeEngine(context.applicationContext)
-        
         val missingStorage = storagePermissions.filter {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray()

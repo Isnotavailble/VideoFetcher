@@ -22,6 +22,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import java.io.File
@@ -70,64 +72,21 @@ class DownloaderViewModel : ViewModel() {
     private var fetchJob: Job? = null
     private var analyzeJob: Job? = null
 
-    fun initializeEngine(context: Context) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                YoutubeDL.getInstance().init(context)
-                FFmpeg.getInstance().init(context)
-                if (DownloadManager.engineState.value is EngineState.Initializing) {
-                    DownloadManager.updateEngineState(EngineState.Idle)
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                DownloadManager.updateEngineState(EngineState.Error("Engine failed to boot: ${e.message}"))
-            }
-        }
-    }
-
     fun checkForEngineUpdate(context: Context, forceCheck: Boolean = false) {
         viewModelScope.launch {
             if (forceCheck) {
                 _engineUpdateState.value = EngineUpdateState.Checking
             }
-            
-            val manager = com.videofetcher.settings.EngineUpdateManager(context)
-            val currentVersion = YoutubeDL.getInstance().version(context)
-            val latestVersion = manager.fetchLatestVersion(forceCheck)
-
-            if (latestVersion != null) {
-                if (latestVersion != currentVersion) {
-                    _engineUpdateState.value = EngineUpdateState.UpdateAvailable(latestVersion)
-                } else {
-                    if (forceCheck) {
-                        _engineUpdateState.value = EngineUpdateState.UpToDate
-                    } else {
-                        _engineUpdateState.value = EngineUpdateState.Idle
-                    }
-                }
-            } else {
-                if (forceCheck) {
-                    _engineUpdateState.value = EngineUpdateState.Error("Failed to check version. Please check network.")
-                } else {
-                    _engineUpdateState.value = EngineUpdateState.Idle
-                }
-            }
+            _engineUpdateState.value = com.videofetcher.settings.EngineUpdateManager(context).checkEngineStatus(context, forceCheck)
         }
     }
 
     fun updateEngine(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             _engineUpdateState.value = EngineUpdateState.Updating
-            val manager = com.videofetcher.settings.EngineUpdateManager(context)
-            val success = manager.updateYtDlpDirectly(context)
+            val success = com.videofetcher.settings.EngineUpdateManager(context).updateYtDlpDirectly(context)
             if (success) {
                 _engineUpdateState.value = EngineUpdateState.Success
-                try {
-                    YoutubeDL.getInstance().init(context)
-                    FFmpeg.getInstance().init(context)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
                 delay(2000)
                 _engineUpdateState.value = EngineUpdateState.Idle
             } else {
@@ -158,11 +117,16 @@ class DownloaderViewModel : ViewModel() {
         analyzeJob = viewModelScope.launch(Dispatchers.IO) {
             _videoInfoState.value = VideoInfoState.Fetching
             try {
-                val request = YoutubeDLRequest(url)
+                val cleanUrl = try {
+                    android.net.Uri.parse(url).buildUpon().clearQuery().build().toString()
+                } catch (e: Exception) {
+                    url
+                }
+                val request = YoutubeDLRequest(cleanUrl)
 
                 if (context != null) {
-                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(url)
-                    val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, url)
+                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl)
+                    val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, cleanUrl)
 
                     if (platformCookieFile != null) {
                         request.addOption("--cookies", platformCookieFile.absolutePath)
@@ -173,18 +137,21 @@ class DownloaderViewModel : ViewModel() {
                     }
                 }
                 
+                val domainKey = if (context != null) com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl) else ""
+                
                 // 1. Global Speed Optimizations & Aggressive Pruning
                 request.addOption("--no-playlist")
                 request.addOption("--no-warnings")
                 request.addOption("--buffer-size", "64K")
                 request.addOption("--no-write-subs")
                 
-                // 2. Force IPv4 to prevent silent 10-second timeout hangs
-                request.addOption("--force-ipv4")
+                // 2. Force IPv4 for non-Instagram requests
+                if (domainKey.lowercase() != "instagram") {
+                    request.addOption("--force-ipv4")
+                }
 
                 // 3. User Preference Speed Toggles
                 if (context != null) {
-                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(url)
                     val permissionManager = PermissionManager(context)
                     if (permissionManager.isBypassSslEnabled()) {
                         request.addOption("--no-check-certificates")
