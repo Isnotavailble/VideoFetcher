@@ -96,11 +96,10 @@ class DownloadService : Service() {
                 val targetDir = File(customPath)
                 if (!targetDir.exists()) targetDir.mkdirs()
 
-                val targetUrl = resolveCanonicalUrl(url)
-                val request = YoutubeDLRequest(targetUrl)
+                val request = YoutubeDLRequest(url)
                 
-                val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(targetUrl)
-                val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, targetUrl)
+                val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(url)
+                val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, url)
                 if (platformCookieFile != null) {
                     request.addOption("--cookies", platformCookieFile.absolutePath)
                     val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(applicationContext, domainKey)
@@ -108,9 +107,20 @@ class DownloadService : Service() {
                     request.addOption("--retries", "3")
                     request.addOption("--fragment-retries", "5")
                 }
-                
-                // Force IPv4 to prevent 15-30s timeout hangs on mobile network IPv6 addresses
+
+                // Global Speed Optimizations
+                request.addOption("--no-playlist")
+                request.addOption("--no-warnings")
+                request.addOption("--buffer-size", "64K")
                 request.addOption("--force-ipv4")
+
+                // User Preference Speed Toggles
+                if (permissionManager.isBypassSslEnabled()) {
+                    request.addOption("--no-check-certificates")
+                }
+                if (permissionManager.isBypassExtractorEnabled() && domainKey.lowercase() !in listOf("youtube", "facebook", "instagram", "tiktok")) {
+                    request.addOption("--force-generic-extractor")
+                }
                 
                 val targetHeight = when {
                     quality == "4K" -> "2160"
@@ -131,8 +141,8 @@ class DownloadService : Service() {
                 }
 
                 if (quality == "Best Quality") {
-                    // Cap automatic "Best Quality" to max 1080p for mobile playback hardware compatibility, with /best/b fallback for Facebook/TikTok/IG
-                    request.addOption("-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best/b")
+                    // Cap automatic "Best Quality" to max 1080p for mobile playback hardware compatibility with pre-merged b/best fallback
+                    request.addOption("-f", "b/best/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]")
                 } else if (quality == "Best Quality (M4A)") {
                     request.addOption("-f", "bestaudio[ext=m4a]/bestaudio/best")
                     request.addOption("--extract-audio")
@@ -147,8 +157,8 @@ class DownloadService : Service() {
                         "Audio (MP3) - Fast" -> request.addOption("--audio-quality", "128K")
                     }
                 } else {
-                    // Force H.264/AVC compatible codecs for Android gallery support with universal /best/b fallback for all platforms
-                    request.addOption("-f", "bestvideo[height<=$targetHeight][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=$targetHeight]+bestaudio/best[height<=$targetHeight]/best/b")
+                    // Force H.264/AVC compatible codecs for Android gallery support with pre-merged b/best fallback
+                    request.addOption("-f", "b/best/bestvideo[height<=$targetHeight][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=$targetHeight]+bestaudio/best[height<=$targetHeight]")
                 }
                 
                 // Embed thumbnail safely by converting WebP thumbnails to JPG first via FFmpeg
@@ -174,24 +184,31 @@ class DownloadService : Service() {
                             return@execute
                         }
 
+                        val trimmedLine = line.trim()
                         val isFinishedDownload = line.contains("[download] 100%") || line.contains("100% of") || progress >= 100f
                         val isConverting = line.contains("[ffmpeg]") || line.contains("Merging")
                         if (isFinishedDownload) downloadFinished = true
 
                         val currentTime = System.currentTimeMillis()
 
-                        if (isConverting || isFinishedDownload || (currentTime - lastUpdateTime > 500 && progress != lastProgress)) {
+                        if (isConverting || isFinishedDownload || trimmedLine.isNotEmpty() || (currentTime - lastUpdateTime > 200)) {
                             lastUpdateTime = currentTime
                             lastProgress = progress
 
-                            val statusText = if (isConverting) {
+                            val statusText = if (trimmedLine.isNotEmpty()) {
+                                if (progress > 0f && !isConverting) {
+                                    "${String.format("%.1f", progress)}% • $trimmedLine"
+                                } else {
+                                    trimmedLine
+                                }
+                            } else if (isConverting) {
                                 "Converting & Merging... Please wait"
                             } else {
                                 "${String.format("%.1f", progress)}% • ETA: ${etaInSeconds}s"
                             }
 
                             DownloadManager.updateDownloadState(url, DownloadState.Downloading(
-                                progress = if (isConverting) 1f else (progress / 100f),
+                                progress = if (isConverting) 1f else (progress / 100f).coerceIn(0f, 1f),
                                 status = statusText
                             ))
 
@@ -352,35 +369,5 @@ class DownloadService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         serviceJob.cancel()
-    }
-
-    private fun resolveCanonicalUrl(url: String): String {
-        if (!url.contains("facebook.com/share") && !url.contains("fb.watch") && !url.contains("youtu.be") && !url.contains("instagr.am")) {
-            return url
-        }
-        return try {
-            var current = url
-            var redirects = 0
-            while (redirects < 5) {
-                val conn = java.net.URL(current).openConnection() as java.net.HttpURLConnection
-                conn.instanceFollowRedirects = false
-                conn.requestMethod = "HEAD"
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                conn.connectTimeout = 4000
-                conn.readTimeout = 4000
-                val code = conn.responseCode
-                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
-                    val loc = conn.getHeaderField("Location")
-                    if (!loc.isNullOrBlank()) {
-                        current = if (loc.startsWith("http")) loc else "https://www.facebook.com$loc"
-                        redirects++
-                    } else break
-                } else break
-                conn.disconnect()
-            }
-            current
-        } catch (e: Exception) {
-            url
-        }
     }
 }

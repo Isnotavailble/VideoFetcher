@@ -281,11 +281,7 @@ object NetscapeCookieWriter {
      * Gets the dedicated cookie file in app private directory context.filesDir.
      */
     fun getCookieFile(context: Context, domainKey: String): File {
-        val privateFile = File(context.filesDir, "${domainKey}_cookies.txt")
-        if (!privateFile.exists() || privateFile.length() <= HEADER.length) {
-            restoreAllBackupsToPrivateStorage(context)
-        }
-        return privateFile
+        return File(context.filesDir, "${domainKey}_cookies.txt")
     }
 
     private fun syncToBackup(context: Context, domainKey: String, sourcePrivateFile: File) {
@@ -307,7 +303,7 @@ object NetscapeCookieWriter {
         if (rawCookieString.isBlank()) return false
         val lower = rawCookieString.lowercase()
         return when (domainKey) {
-            "youtube" -> lower.contains("sapisid") || lower.contains("sid") || lower.contains("login_info")
+            "youtube" -> lower.contains("sapisid") || lower.contains("hsid") || lower.contains("ssid")
             "instagram" -> lower.contains("sessionid") || lower.contains("ds_user_id")
             "facebook" -> lower.contains("c_user") || lower.contains("xs")
             "tiktok" -> lower.contains("sessionid")
@@ -383,19 +379,12 @@ object NetscapeCookieWriter {
     }
 
     /**
-     * Resolves the input URL's domain key and returns its cookie file if authenticated session tokens exist.
+     * Resolves the input URL's domain key and returns its cookie file if an active cookie file exists in private storage.
      */
     fun getCookieFileForUrl(context: Context, inputUrl: String): File? {
         val domainKey = getDomainKey(inputUrl)
-        val file = getCookieFile(context, domainKey)
-        if (!file.exists() || file.length() <= HEADER.length) return null
-
-        return try {
-            val text = file.readText().lowercase()
-            if (hasAuthTokens(domainKey, text)) file else null
-        } catch (e: Exception) {
-            null
-        }
+        val file = File(context.filesDir, "${domainKey}_cookies.txt")
+        return if (file.exists() && file.length() > HEADER.length) file else null
     }
 
     /**

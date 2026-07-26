@@ -63,11 +63,6 @@ class QuickDownloadActivity : ComponentActivity() {
         
         settingsManager = SettingsManager(applicationContext)
 
-        // Asynchronously restore surviving persistent cookie backups into private app storage on launch
-        lifecycleScope.launch(Dispatchers.IO) {
-            com.videofetcher.cookies.NetscapeCookieWriter.restoreAllBackupsToPrivateStorage(applicationContext)
-        }
-
         var sharedUrl = ""
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""

@@ -158,12 +158,11 @@ class DownloaderViewModel : ViewModel() {
         analyzeJob = viewModelScope.launch(Dispatchers.IO) {
             _videoInfoState.value = VideoInfoState.Fetching
             try {
-                val targetUrl = resolveCanonicalUrl(url)
-                val request = YoutubeDLRequest(targetUrl)
+                val request = YoutubeDLRequest(url)
 
                 if (context != null) {
-                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(targetUrl)
-                    val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, targetUrl)
+                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(url)
+                    val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, url)
 
                     if (platformCookieFile != null) {
                         request.addOption("--cookies", platformCookieFile.absolutePath)
@@ -174,13 +173,26 @@ class DownloaderViewModel : ViewModel() {
                     }
                 }
                 
-                // 1. Aggressive Pruning (Ignore comments, subtitles, and playlists)
+                // 1. Global Speed Optimizations & Aggressive Pruning
                 request.addOption("--no-playlist")
+                request.addOption("--no-warnings")
+                request.addOption("--buffer-size", "64K")
                 request.addOption("--no-write-subs")
-                request.addOption("--compat-options", "no-youtube-unavailable-videos")
                 
                 // 2. Force IPv4 to prevent silent 10-second timeout hangs
                 request.addOption("--force-ipv4")
+
+                // 3. User Preference Speed Toggles
+                if (context != null) {
+                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(url)
+                    val permissionManager = PermissionManager(context)
+                    if (permissionManager.isBypassSslEnabled()) {
+                        request.addOption("--no-check-certificates")
+                    }
+                    if (permissionManager.isBypassExtractorEnabled() && domainKey.lowercase() !in listOf("youtube", "facebook", "instagram", "tiktok")) {
+                        request.addOption("--force-generic-extractor")
+                    }
+                }
                 
                 val info = YoutubeDL.getInstance().getInfo(request)
                 
@@ -713,38 +725,6 @@ class DownloaderViewModel : ViewModel() {
         if (currentState is FilesListState.Success) {
             val updatedList = currentState.files.filter { it.path != fileDetails.path }
             _filesListState.value = FilesListState.Success(updatedList)
-        }
-    }
-
-    private suspend fun resolveCanonicalUrl(url: String): String {
-        if (!url.contains("facebook.com/share") && !url.contains("fb.watch") && !url.contains("youtu.be") && !url.contains("instagr.am")) {
-            return url
-        }
-        return withContext(Dispatchers.IO) {
-            try {
-                var current = url
-                var redirects = 0
-                while (redirects < 5) {
-                    val conn = java.net.URL(current).openConnection() as java.net.HttpURLConnection
-                    conn.instanceFollowRedirects = false
-                    conn.requestMethod = "HEAD"
-                    conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                    conn.connectTimeout = 4000
-                    conn.readTimeout = 4000
-                    val code = conn.responseCode
-                    if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
-                        val loc = conn.getHeaderField("Location")
-                        if (!loc.isNullOrBlank()) {
-                            current = if (loc.startsWith("http")) loc else "https://www.facebook.com$loc"
-                            redirects++
-                        } else break
-                    } else break
-                    conn.disconnect()
-                }
-                current
-            } catch (e: Exception) {
-                url
-            }
         }
     }
 }
