@@ -750,11 +750,13 @@ fun FilesContent(
                     
                     // Permission saved! Automatically retry the deletion silently
                     fileAwaitingPermission?.let { fileToDelete ->
+                        val isAudio = fileToDelete.path.contains("(MP3", ignoreCase = true) || fileToDelete.path.contains("(M4A", ignoreCase = true) || fileToDelete.path.endsWith(".mp3", ignoreCase = true) || fileToDelete.path.endsWith(".m4a", ignoreCase = true)
+                        val typeLabel = if (isAudio) "Audio" else "Video"
                         viewModel.deleteVideo(
                             context = context.applicationContext,
                             fileDetails = fileToDelete,
                             onSuccess = {
-                                Toast.makeText(context, "Video deleted", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "$typeLabel deleted", Toast.LENGTH_SHORT).show()
                                 viewModel.fetchDownloadedFiles(context.applicationContext)
                             },
                             onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
@@ -779,7 +781,7 @@ fun FilesContent(
                 fileAwaitingPermission = null
             },
             title = { Text("Grant Folder Access", fontWeight = FontWeight.Bold) },
-            text = { Text("To delete videos downloaded from a previous installation, we need access to the VideoFetcher folder.\n\nPlease tap 'Continue', select the 'VideoFetcher' folder, and tap 'Use this folder'.") },
+            text = { Text("To delete files downloaded from a previous installation, we need access to the VideoFetcher folder.\n\nPlease tap 'Continue', select the 'VideoFetcher' folder, and tap 'Use this folder'.") },
             confirmButton = {
                 TextButton(onClick = {
                     showFolderInstructionDialog = false
@@ -800,9 +802,14 @@ fun FilesContent(
     }
 
     if (fileToConfirmDelete != null) {
+        val isAudio = fileToConfirmDelete?.path?.let {
+            it.contains("(MP3", ignoreCase = true) || it.contains("(M4A", ignoreCase = true) || it.endsWith(".mp3", ignoreCase = true) || it.endsWith(".m4a", ignoreCase = true)
+        } == true
+        val typeLabel = if (isAudio) "Audio" else "Video"
+
         AlertDialog(
             onDismissRequest = { fileToConfirmDelete = null },
-            title = { Text("Delete Video", fontWeight = FontWeight.Bold) },
+            title = { Text("Delete $typeLabel", fontWeight = FontWeight.Bold) },
             text = { Text("Are you sure you want to delete '${fileToConfirmDelete?.title}'?\nThis action cannot be undone.") },
             confirmButton = {
                 TextButton(
@@ -813,14 +820,14 @@ fun FilesContent(
                             context = context.applicationContext,
                             fileDetails = fileToDelete,
                             onSuccess = {
-                                Toast.makeText(context, "Video deleted", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "$typeLabel deleted", Toast.LENGTH_SHORT).show()
                                 viewModel.fetchDownloadedFiles(context.applicationContext)
                             },
-                                onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
-                                onPermissionRequired = {
-                                    fileAwaitingPermission = fileToDelete
-                                    showFolderInstructionDialog = true
-                                }
+                            onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
+                            onPermissionRequired = {
+                                fileAwaitingPermission = fileToDelete
+                                showFolderInstructionDialog = true
+                            }
                         )
                     }
                 ) {

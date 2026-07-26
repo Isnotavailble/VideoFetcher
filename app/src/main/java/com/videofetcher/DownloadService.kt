@@ -2,6 +2,7 @@ package com.videofetcher
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -76,7 +77,7 @@ class DownloadService : Service() {
         activeQualities[url] = quality
         DownloadManager.updateDownloadState(url, DownloadState.Downloading(0f, "0% • Starting..."))
         
-        val initialNotification = createNotification("0% • Starting...", 0)
+        val initialNotification = createNotification("Starting Download...", "0% • Starting...", 0)
         startForeground(notificationId, initialNotification.build())
         
         val job = serviceScope.launch {
@@ -173,9 +174,12 @@ class DownloadService : Service() {
                 if (quality != "Best Quality (M4A)" && !quality.startsWith("Audio (MP3)")) {
                     request.addOption("--merge-output-format", "mp4")
                 }
+                val tempDir = File(targetDir, ".vdf_temp")
+                if (!tempDir.exists()) tempDir.mkdirs()
+
                 val initialFiles = targetDir.listFiles()?.map { it.absolutePath }?.toSet() ?: emptySet()
                 request.addOption("--trim-filenames", "80")
-                request.addOption("-o", "${targetDir.absolutePath}/%(title,id,uuid)s_${resolutionSignature}_vdf.%(ext)s")
+                request.addOption("-o", "${tempDir.absolutePath}/%(title,id,uuid)s_${resolutionSignature}_vdf.%(ext)s")
                 request.addOption("--concurrent-fragments", "1")
                 request.addOption("--http-chunk-size", "10M")
 
@@ -215,7 +219,8 @@ class DownloadService : Service() {
                                 status = statusText
                             ))
 
-                            val notification = createNotification(statusText, progress.toInt())
+                            val titleText = if (isConverting) "Converting & Merging..." else "Downloading Video..."
+                            val notification = createNotification(titleText, statusText, progress.toInt())
                             notificationManager.notify(notificationId, notification.build())
                         }
                     }
@@ -234,24 +239,58 @@ class DownloadService : Service() {
                 }
 
                 if (isActive) {
-                    // Verify new file created during this job exists on disk
-                    val matchingFile = targetDir.listFiles()?.firstOrNull { it.absolutePath !in initialFiles && it.name.contains("_vdf.") && it.length() > 0 }
-                    if (downloadFinished && matchingFile != null && matchingFile.exists()) {
+                    val tempOutputFile = tempDir.listFiles()?.firstOrNull { it.isFile && it.name.contains("_vdf.") && it.length() > 0 }
+                    if (downloadFinished && tempOutputFile != null && tempOutputFile.exists()) {
+                        val originalName = tempOutputFile.name
+                        val ext = tempOutputFile.extension
+                        val nameWithoutExt = tempOutputFile.nameWithoutExtension
+
+                        val (baseName, vdfSuffix) = if (nameWithoutExt.endsWith("_vdf", ignoreCase = true)) {
+                            nameWithoutExt.substring(0, nameWithoutExt.length - 4) to "_vdf"
+                        } else {
+                            nameWithoutExt to ""
+                        }
+
+                        var destFile = File(targetDir, originalName)
+                        var counter = 1
+                        while (destFile.exists()) {
+                            destFile = File(targetDir, "${baseName}_${counter}${vdfSuffix}.${ext}")
+                            counter++
+                        }
+
+                        val moved = tempOutputFile.renameTo(destFile)
+                        if (!moved) {
+                            tempOutputFile.copyTo(destFile, overwrite = true)
+                            tempOutputFile.delete()
+                        }
+                        tempDir.deleteRecursively()
+
                         DownloadManager.updateDownloadState(url, DownloadState.Success("Video successfully saved!"))
 
+                        val clickIntent = Intent(this@DownloadService, MainActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        }
+                        val pendingIntent = PendingIntent.getActivity(
+                            this@DownloadService,
+                            0,
+                            clickIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                        )
+
                         val successNotification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
-                            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                            .setSmallIcon(R.mipmap.ic_launcher)
                             .setContentTitle("Video Downloaded")
                             .setContentText("Successfully saved to ${targetDir.name}")
+                            .setContentIntent(pendingIntent)
+                            .setAutoCancel(true)
                             .build()
                         notificationManager.notify(notificationId + 1, successNotification)
                         notificationManager.cancel(notificationId)
 
                         // Trigger MediaStore scan via absolute path so gallery sees the file
-                        val scanPath = matchingFile.absolutePath
                         MediaScannerConnection.scanFile(
                             applicationContext,
-                            arrayOf(scanPath),
+                            arrayOf(destFile.absolutePath),
                             null
                         ) { _, _ -> DownloadManager.triggerFileRefresh() }
                     } else {
@@ -277,6 +316,27 @@ class DownloadService : Service() {
                     }
                     
                     DownloadManager.updateDownloadState(url, DownloadState.Error(friendlyMessage))
+
+                    val clickIntent = Intent(this@DownloadService, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    }
+                    val pendingIntent = PendingIntent.getActivity(
+                        this@DownloadService,
+                        0,
+                        clickIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+
+                    val errorNotification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
+                        .setSmallIcon(R.mipmap.ic_launcher)
+                        .setContentTitle("Download Failed")
+                        .setContentText(friendlyMessage)
+                        .setStyle(NotificationCompat.BigTextStyle().bigText(friendlyMessage))
+                        .setContentIntent(pendingIntent)
+                        .setAutoCancel(true)
+                        .build()
+
+                    notificationManager.notify(notificationId + 2, errorNotification)
                     notificationManager.cancel(notificationId)
                 }
             } finally {
@@ -346,13 +406,24 @@ class DownloadService : Service() {
         }
     }
 
-    private fun createNotification(status: String, progress: Int): NotificationCompat.Builder {
+    private fun createNotification(title: String, status: String, progress: Int): NotificationCompat.Builder {
+        val clickIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            clickIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Downloading Video...")
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
             .setContentText(status)
             .setProgress(100, progress, false) // Solid progress bar right from 0%
             .setColor(android.graphics.Color.parseColor("#2196F3")) // Standard Download Blue
+            .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
     }

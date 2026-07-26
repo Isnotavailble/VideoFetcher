@@ -20,6 +20,22 @@ class VideoFetcherApp : Application() {
         // Pre-warm YoutubeDL and FFmpeg concurrently in background threads on app startup
         appScope.launch {
             try {
+                val permissionManager = PermissionManager(applicationContext)
+                val tempBaseDir = java.io.File(permissionManager.getCustomDownloadFolderPath(), ".vdf_temp")
+                if (tempBaseDir.exists()) {
+                    val now = System.currentTimeMillis()
+                    val thresholdMs = 24 * 60 * 60 * 1000L // 24 hours
+                    tempBaseDir.listFiles()?.forEach { file ->
+                        if (now - file.lastModified() > thresholdMs) {
+                            file.deleteRecursively()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            try {
                 val ytJob = async { YoutubeDL.getInstance().init(applicationContext) }
                 val ffmpegJob = async { FFmpeg.getInstance().init(applicationContext) }
                 awaitAll(ytJob, ffmpegJob)

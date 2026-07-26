@@ -69,6 +69,8 @@ class EngineUpdateManager(context: Context) {
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+            }
+        }
         return@withContext null
     }
 
