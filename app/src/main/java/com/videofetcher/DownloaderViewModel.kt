@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.ContentUris
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaScannerConnection
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -24,8 +25,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -347,7 +351,7 @@ class DownloaderViewModel : ViewModel() {
                 val initialList = files.map { file ->
                     existingFilesMap[file.absolutePath] ?: run {
                         val (title, signature) = parseFileName(file.name)
-                        val thumbFile = File(thumbCacheDir, "${file.name}.png")
+                        val thumbFile = File(thumbCacheDir, "${file.name}.jpg")
                         DownloadedFileDetails(
                             title = title,
                             path = file.absolutePath,
@@ -362,74 +366,92 @@ class DownloaderViewModel : ViewModel() {
                 // Immediately update UI with names and sizes
                 _filesListState.value = FilesListState.Success(initialList.toList())
 
-                // STEP 2: Lazy processing - Fetch durations and missing thumbnails in background
-                for (i in files.indices) {
-                    // Skip expensive processing if we already have a valid duration and thumbnail!
-                    if (initialList[i].duration != "--:--" && initialList[i].thumbnailUri != Uri.EMPTY) {
-                        continue
-                    }
+                // STEP 2: Parallel lazy processing with strict CPU throttling (max 2 worker threads)
+                val itemsToProcess = files.indices.filter { i ->
+                    initialList[i].duration == "--:--" || initialList[i].thumbnailUri == Uri.EMPTY
+                }
 
-                    val file = files[i]
-                    val thumbFile = File(thumbCacheDir, "${file.name}.png")
-                    var updatedUri = initialList[i].thumbnailUri
-                    var updatedDuration = initialList[i].duration
+                if (itemsToProcess.isNotEmpty()) {
+                    val semaphore = Semaphore(2)
+                    coroutineScope {
+                        itemsToProcess.map { i ->
+                            async(Dispatchers.IO) {
+                                semaphore.withPermit {
+                                    val file = files[i]
+                                    val thumbFile = File(thumbCacheDir, "${file.name}.jpg")
+                                    var updatedUri = initialList[i].thumbnailUri
+                                    var updatedDuration = initialList[i].duration
 
-                    val retriever = MediaMetadataRetriever()
-                    try {
-                        var fileReadable = false
-                        var attempts = 0
-                        while (!fileReadable && attempts < 10) {
-                            try {
-                                val ext = file.extension.lowercase()
-                                val mimeType = if (ext in listOf("mp3", "m4a")) "audio/*" else "video/*"
-                                val uri = getFileUri(context, file.absolutePath, mimeType)
-                                
-                                if (uri != null) {
-                                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                                        retriever.setDataSource(pfd.fileDescriptor)
-                                        fileReadable = true
+                                    val retriever = MediaMetadataRetriever()
+                                    try {
+                                        var fileReadable = false
+                                        var attempts = 0
+                                        while (!fileReadable && attempts < 2) {
+                                            try {
+                                                val ext = file.extension.lowercase()
+                                                val mimeType = if (ext in listOf("mp3", "m4a")) "audio/*" else "video/*"
+                                                val uri = getFileUri(context, file.absolutePath, mimeType)
+                                                
+                                                if (uri != null) {
+                                                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                                                        retriever.setDataSource(pfd.fileDescriptor)
+                                                        fileReadable = true
+                                                    }
+                                                }
+                                                
+                                                if (!fileReadable) {
+                                                    retriever.setDataSource(file.absolutePath)
+                                                    fileReadable = true
+                                                }
+                                            } catch (e: Exception) {
+                                                attempts++
+                                                if (attempts < 2) delay(50)
+                                            }
+                                        }
+
+                                        if (fileReadable) {
+                                            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
+                                            updatedDuration = formatDuration(durationMs)
+
+                                            if (!thumbFile.exists()) {
+                                                val ext = file.extension.lowercase()
+                                                val bitmap: Bitmap? = if (ext in listOf("mp3", "m4a", "flac", "aac")) {
+                                                    val pictureBytes = retriever.embeddedPicture
+                                                    if (pictureBytes != null) {
+                                                        BitmapFactory.decodeByteArray(pictureBytes, 0, pictureBytes.size)
+                                                    } else null
+                                                } else {
+                                                    val timeUs = if (durationMs > 2000) (durationMs / 2) * 1000 else 1000000L
+                                                    retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                                }
+
+                                                if (bitmap != null) {
+                                                    val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 250, 250, true)
+                                                    FileOutputStream(thumbFile).use { out ->
+                                                        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                                                    }
+                                                    if (scaledBitmap != bitmap) scaledBitmap.recycle()
+                                                    scaledBitmap.recycle()
+                                                    updatedUri = Uri.fromFile(thumbFile)
+                                                }
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    } finally {
+                                        try { retriever.release() } catch (e: Exception) {}
+                                    }
+
+                                    if (updatedDuration != initialList[i].duration || updatedUri != initialList[i].thumbnailUri) {
+                                        synchronized(initialList) {
+                                            initialList[i] = initialList[i].copy(duration = updatedDuration, thumbnailUri = updatedUri)
+                                            _filesListState.value = FilesListState.Success(initialList.toList())
+                                        }
                                     }
                                 }
-                                
-                                if (!fileReadable) {
-                                    retriever.setDataSource(file.absolutePath)
-                                    fileReadable = true
-                                }
-                            } catch (e: Exception) {
-                                attempts++
-                                if (attempts < 10) delay(500)
                             }
-                        }
-
-                        if (fileReadable) {
-                            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
-                            updatedDuration = formatDuration(durationMs)
-
-                            if (!thumbFile.exists()) {
-                                val timeUs = if (durationMs > 2000) (durationMs / 2) * 1000 else 1000000L
-                                val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                                if (bitmap != null) {
-                                    FileOutputStream(thumbFile).use { out ->
-                                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                                    }
-                                    updatedUri = Uri.fromFile(thumbFile)
-                                }
-                            }
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    } finally {
-                        try { retriever.release() } catch (e: Exception) {}
+                        }.awaitAll()
                     }
-
-                    // Only update the state if something actually changed
-                    if (updatedDuration != initialList[i].duration || updatedUri != initialList[i].thumbnailUri) {
-                        initialList[i] = initialList[i].copy(duration = updatedDuration, thumbnailUri = updatedUri)
-                        _filesListState.value = FilesListState.Success(initialList.toList())
-                    }
-                    
-                    // Add a tiny delay to let Garbage Collection clean up Bitmaps to prevent OOM
-                    delay(50)
                 }
             } catch (e: Exception) {
                 // Ignore Coroutine cancellations so they don't trigger the Error UI

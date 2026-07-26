@@ -7,6 +7,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.media.MediaScannerConnection
+import android.media.MediaMetadataRetriever
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import java.io.FileOutputStream
 import android.os.Build
 import android.os.Environment
 import android.os.IBinder
@@ -294,6 +298,59 @@ class DownloadService : Service() {
                             tempOutputFile.delete()
                         }
                         tempDir.deleteRecursively()
+
+                        // Pre-extract local video/audio thumbnail directly from saved file for instant Files tab rendering
+                        try {
+                            val thumbCacheDir = File(cacheDir, "thumbnails")
+                            if (!thumbCacheDir.exists()) thumbCacheDir.mkdirs()
+                            val thumbFile = File(thumbCacheDir, "${destFile.name}.jpg")
+                            val ext = destFile.extension.lowercase()
+                            if (!thumbFile.exists()) {
+                                var bitmap: Bitmap? = null
+
+                                // 1. Try web thumbnail URL fetched during download first (works for audio & video downloaded from web links)
+                                val webThumbUrl = DownloadManager.downloadThumbnails.value[url] ?: ""
+                                if (webThumbUrl.isNotBlank()) {
+                                    try {
+                                        val input = java.net.URL(webThumbUrl).openStream()
+                                        bitmap = BitmapFactory.decodeStream(input)
+                                    } catch (e: Exception) {
+                                        bitmap = null
+                                    }
+                                }
+
+                                // 2. Fallback to local frame / embedded picture extraction
+                                if (bitmap == null) {
+                                    val retriever = MediaMetadataRetriever()
+                                    try {
+                                        retriever.setDataSource(destFile.absolutePath)
+                                        bitmap = if (ext in listOf("mp3", "m4a", "flac", "aac")) {
+                                            val pictureBytes = retriever.embeddedPicture
+                                            if (pictureBytes != null) {
+                                                BitmapFactory.decodeByteArray(pictureBytes, 0, pictureBytes.size)
+                                            } else null
+                                        } else {
+                                            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
+                                            val timeUs = if (durationMs > 2000) (durationMs / 2) * 1000 else 1000000L
+                                            retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                        }
+                                    } finally {
+                                        try { retriever.release() } catch (e: Exception) {}
+                                    }
+                                }
+
+                                if (bitmap != null) {
+                                    val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 250, 250, true)
+                                    FileOutputStream(thumbFile).use { out ->
+                                        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                                    }
+                                    if (scaledBitmap != bitmap) bitmap.recycle()
+                                    scaledBitmap.recycle()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
 
                         DownloadManager.updateDownloadState(url, DownloadState.Success("Video successfully saved!"))
 

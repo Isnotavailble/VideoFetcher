@@ -59,7 +59,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.SubcomposeAsyncImage
+import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.transform.RoundedCornersTransformation
 import kotlinx.coroutines.delay
@@ -424,16 +424,10 @@ fun HomeContent(
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    SubcomposeAsyncImage(
-                                        model = ImageRequest.Builder(LocalContext.current)
-                                            .data(state.thumbnailUrl)
-                                            .crossfade(true)
-                                            .build(),
-                                        contentDescription = "Video Thumbnail",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)),
-                                        loading = { Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))) },
-                                        error = { Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))) }
+                                    VideoThumbnailBox(
+                                        imageData = state.thumbnailUrl,
+                                        isAudio = false,
+                                        size = 60.dp
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
@@ -843,6 +837,16 @@ fun FilesContent(
         )
     }
 
+    val (videoFiles, audioFiles) = remember(filesListState) {
+        if (filesListState is FilesListState.Success) {
+            val videoRegex = Regex(".*_vdf\\.mp4$", RegexOption.IGNORE_CASE)
+            val audioRegex = Regex(".*_vdf\\.(?!mp4)[^.]+$", RegexOption.IGNORE_CASE)
+            filesListState.files.filter { it.path.matches(videoRegex) } to filesListState.files.filter { it.path.matches(audioRegex) }
+        } else {
+            emptyList<DownloadedFileDetails>() to emptyList<DownloadedFileDetails>()
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Text("My Files", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
         Spacer(modifier = Modifier.height(24.dp))
@@ -878,7 +882,7 @@ fun FilesContent(
 
             if (pausedDownloads.isNotEmpty()) {
                 item { Text("Paused Videos", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(bottom = 8.dp)) }
-                items(items = pausedDownloads, key = { it.url }) { paused ->
+                items(items = pausedDownloads, key = { it.url }, contentType = { "paused_card" }) { paused ->
                     PausedVideoCard(
                         paused = paused,
                         onResume = { viewModel.resumeDownload(context.applicationContext, paused.url, paused.quality) },
@@ -890,12 +894,6 @@ fun FilesContent(
 
             when (val filesList = filesListState) {
                 is FilesListState.Success -> {
-                    val videoRegex = Regex(".*_vdf\\.mp4$", RegexOption.IGNORE_CASE)
-                    val audioRegex = Regex(".*_vdf\\.(?!mp4)[^.]+$", RegexOption.IGNORE_CASE)
-                    
-                    val videoFiles = filesList.files.filter { it.path.matches(videoRegex) }
-                    val audioFiles = filesList.files.filter { it.path.matches(audioRegex) }
-
                     if (filesList.files.isEmpty() && pausedDownloads.isEmpty()) {
                         item { Text("No downloads yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)) }
                     } else {
@@ -925,7 +923,7 @@ fun FilesContent(
                                     Text("No video downloads yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.padding(bottom = 16.dp))
                                 }
                             } else {
-                                items(items = videoFiles, key = { it.path }) { file ->
+                                items(items = videoFiles, key = { it.path }, contentType = { "downloaded_video" }) { file ->
                                     DownloadedVideoCard(
                                         file = file,
                                         viewModel = viewModel,
@@ -962,7 +960,7 @@ fun FilesContent(
                                     Text("No audio downloads yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.padding(bottom = 16.dp))
                                 }
                             } else {
-                                items(items = audioFiles, key = { it.path }) { file ->
+                                items(items = audioFiles, key = { it.path }, contentType = { "downloaded_audio" }) { file ->
                                     DownloadedVideoCard(
                                         file = file,
                                         viewModel = viewModel,
@@ -1293,6 +1291,22 @@ fun VideoThumbnailBox(
             .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
         contentAlignment = Alignment.Center
     ) {
+        if (isAudio) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_earphone),
+                contentDescription = "No Thumbnail",
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                modifier = Modifier.size((size.value * 0.4f).dp)
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = "No Thumbnail",
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                modifier = Modifier.size((size.value * 0.4f).dp)
+            )
+        }
+
         val hasData = when (imageData) {
             is String -> imageData.isNotBlank()
             is Uri -> imageData != Uri.EMPTY
@@ -1300,39 +1314,15 @@ fun VideoThumbnailBox(
         }
 
         if (hasData) {
-            SubcomposeAsyncImage(
+            AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(imageData)
                     .crossfade(true)
                     .build(),
                 contentDescription = "Video Thumbnail",
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-                loading = {
-                    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                        if (isAudio) {
-                            Icon(painterResource(id = R.drawable.ic_earphone), contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                        } else {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                        }
-                    }
-                },
-                error = {
-                    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                        if (isAudio) {
-                            Icon(painterResource(id = R.drawable.ic_earphone), contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                        } else {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                        }
-                    }
-                }
+                modifier = Modifier.fillMaxSize()
             )
-        } else {
-            if (isAudio) {
-                Icon(painterResource(id = R.drawable.ic_earphone), contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-            } else {
-                Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-            }
         }
     }
 }
