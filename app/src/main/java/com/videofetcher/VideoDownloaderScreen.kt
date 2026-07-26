@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -1280,25 +1281,69 @@ fun SettingsContent(
 }
 
 @Composable
+fun VideoThumbnailBox(
+    imageData: Any?,
+    isAudio: Boolean = false,
+    size: Dp = 80.dp
+) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
+        contentAlignment = Alignment.Center
+    ) {
+        val hasData = when (imageData) {
+            is String -> imageData.isNotBlank()
+            is Uri -> imageData != Uri.EMPTY
+            else -> imageData != null
+        }
+
+        if (hasData) {
+            SubcomposeAsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(imageData)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "Video Thumbnail",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                loading = {
+                    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
+                        if (isAudio) {
+                            Icon(painterResource(id = R.drawable.ic_earphone), contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                        } else {
+                            Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                        }
+                    }
+                },
+                error = {
+                    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
+                        if (isAudio) {
+                            Icon(painterResource(id = R.drawable.ic_earphone), contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                        } else {
+                            Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                        }
+                    }
+                }
+            )
+        } else {
+            if (isAudio) {
+                Icon(painterResource(id = R.drawable.ic_earphone), contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+            } else {
+                Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+            }
+        }
+    }
+}
+
+@Composable
 fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: DownloaderViewModel, context: android.content.Context) {
+    val downloadThumbnails by com.videofetcher.DownloadManager.downloadThumbnails.collectAsState()
+    val thumbnailUrl = downloadThumbnails[url]
+
     val isFinished = downloadState is DownloadState.Success || downloadState is DownloadState.Error || downloadState is DownloadState.Cancelled
     val isDownloading = downloadState is DownloadState.Downloading
-
-    val iconColor = when (downloadState) {
-        is DownloadState.Queued -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-        is DownloadState.Downloading -> MaterialTheme.colorScheme.primary
-        is DownloadState.Success -> MaterialTheme.colorScheme.primary
-        is DownloadState.Error -> MaterialTheme.colorScheme.error
-        is DownloadState.Cancelled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-    }
-
-    val iconVector = when (downloadState) {
-        is DownloadState.Queued -> Icons.Filled.Info
-        is DownloadState.Downloading -> null
-        is DownloadState.Success -> Icons.Filled.Check
-        is DownloadState.Error -> Icons.Filled.Warning
-        is DownloadState.Cancelled -> Icons.Filled.Close
-    }
 
     Row(
         modifier = Modifier
@@ -1306,29 +1351,11 @@ fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: Dow
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(80.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)),
-            contentAlignment = Alignment.Center
-        ) {
-            if (downloadState is DownloadState.Downloading) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_download),
-                    contentDescription = "Downloading",
-                    tint = iconColor,
-                    modifier = Modifier.size(32.dp)
-                )
-            } else {
-                Icon(
-                    imageVector = iconVector!!,
-                    contentDescription = "State Icon",
-                    tint = iconColor,
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-        }
+        VideoThumbnailBox(
+            imageData = thumbnailUrl,
+            isAudio = false,
+            size = 80.dp
+        )
 
         Spacer(modifier = Modifier.width(16.dp))
 
@@ -1573,37 +1600,11 @@ fun DownloadedVideoCard(
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                SubcomposeAsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(if (file.thumbnailUri == Uri.EMPTY) null else file.thumbnailUri)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = "Video Thumbnail",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(80.dp)
-                        .clip(RoundedCornerShape(8.dp)),
-                    loading = {
-                        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                            if (isAudio) {
-                                Icon(painterResource(id = R.drawable.ic_earphone), contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                            } else {
-                                Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                            }
-                        }
-                    },
-                    error = {
-                        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                            if (isAudio) {
-                                Icon(painterResource(id = R.drawable.ic_earphone), contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                            } else {
-                                Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                            }
-                        }
-                    }
-                )
-            }
+            VideoThumbnailBox(
+                imageData = if (file.thumbnailUri == Uri.EMPTY) null else file.thumbnailUri,
+                isAudio = isAudio,
+                size = 80.dp
+            )
 
             Spacer(modifier = Modifier.width(16.dp))
 
@@ -1719,20 +1720,11 @@ fun PausedVideoCard(paused: PausedDownload, onResume: () -> Unit, onCancel: () -
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(80.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = "Paused",
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.size(32.dp)
-                )
-            }
+            VideoThumbnailBox(
+                imageData = paused.thumbnailUrl.ifBlank { null },
+                isAudio = paused.quality.contains("MP3", ignoreCase = true) || paused.quality.contains("M4A", ignoreCase = true),
+                size = 80.dp
+            )
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = "Paused (${paused.quality})", fontWeight = FontWeight.Bold, fontSize = 14.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurface)

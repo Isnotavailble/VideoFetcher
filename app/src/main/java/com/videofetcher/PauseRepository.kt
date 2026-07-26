@@ -9,7 +9,8 @@ data class PausedDownload(
     val url: String,
     val title: String,
     val quality: String,
-    val progress: Float
+    val progress: Float,
+    val thumbnailUrl: String = ""
 )
 
 // 2. The Repository to manage SharedPreferences safely
@@ -22,6 +23,7 @@ class PauseRepository(context: Context) {
             put("title", download.title)
             put("quality", download.quality)
             put("progress", download.progress.toDouble()) // JSON prefers Doubles over Floats
+            put("thumbnailUrl", download.thumbnailUrl)
         }
         
         // The URL is the KEY, the JSON String is the VALUE
@@ -35,9 +37,10 @@ class PauseRepository(context: Context) {
             val json = JSONObject(jsonString)
             PausedDownload(
                 url = url,
-                title = json.getString("title"),
-                quality = json.getString("quality"),
-                progress = json.getDouble("progress").toFloat()
+                title = json.optString("title", "Video"),
+                quality = json.optString("quality", "1080p"),
+                progress = json.optDouble("progress", 0.0).toFloat(),
+                thumbnailUrl = json.optString("thumbnailUrl", "")
             )
         } catch (e: Exception) {
             null

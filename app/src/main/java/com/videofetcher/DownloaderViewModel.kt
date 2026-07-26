@@ -207,10 +207,20 @@ class DownloaderViewModel : ViewModel() {
     fun startDownload(url: String, quality: String, context: Context) {
         if (url.isBlank()) return
 
+        val currentInfo = _videoInfoState.value
+        val thumbUrl = if (currentInfo is VideoInfoState.Success) currentInfo.thumbnailUrl else ""
+        val titleText = if (currentInfo is VideoInfoState.Success) currentInfo.title else "Video"
+
+        if (thumbUrl.isNotBlank()) {
+            DownloadManager.updateDownloadThumbnail(url, thumbUrl)
+        }
+
         val serviceIntent = Intent(context, DownloadService::class.java).apply {
             action = "START_DOWNLOAD"
             putExtra("URL", url)
             putExtra("QUALITY", quality)
+            putExtra("THUMBNAIL_URL", thumbUrl)
+            putExtra("TITLE", titleText)
         }
         context.startService(serviceIntent)
     }

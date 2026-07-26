@@ -53,6 +53,10 @@ class DownloadService : Service() {
             "CANCEL_DOWNLOAD" -> cancelDownload(url)
             "START_DOWNLOAD" -> {
                 val quality = intent.getStringExtra("QUALITY") ?: "1080p"
+                val thumbnailUrl = intent.getStringExtra("THUMBNAIL_URL") ?: ""
+                if (thumbnailUrl.isNotBlank()) {
+                    DownloadManager.updateDownloadThumbnail(url, thumbnailUrl)
+                }
                 
                 if (activeJobs.containsKey(url) || pendingQueue.any { it.first == url }) {
                     return START_NOT_STICKY // Already active or queued
@@ -127,6 +131,33 @@ class DownloadService : Service() {
                 if (permissionManager.isBypassExtractorEnabled() && domainKey.lowercase() !in listOf("youtube", "facebook", "instagram", "tiktok")) {
                     request.addOption("--force-generic-extractor")
                 }
+
+                // Asynchronously fetch real video thumbnail in isolated background job (does not block download execution)
+                if (DownloadManager.downloadThumbnails.value[url].isNullOrBlank()) {
+                    serviceScope.launch(Dispatchers.IO) {
+                        try {
+                            val infoReq = YoutubeDLRequest(cleanUrl).apply {
+                                addOption("--no-playlist")
+                                addOption("--no-warnings")
+                                if (domainKey.lowercase() != "instagram") {
+                                    addOption("--force-ipv4")
+                                }
+                                if (platformCookieFile != null) {
+                                    addOption("--cookies", platformCookieFile.absolutePath)
+                                    val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(applicationContext, domainKey)
+                                    addOption("--user-agent", effectiveUserAgent)
+                                }
+                            }
+                            val videoInfo = YoutubeDL.getInstance().getInfo(infoReq)
+                            val fetchedThumb = videoInfo.thumbnail ?: ""
+                            if (fetchedThumb.isNotBlank()) {
+                                DownloadManager.updateDownloadThumbnail(url, fetchedThumb)
+                            }
+                        } catch (e: Exception) {
+                            // Silently ignore thumbnail fetch errors
+                        }
+                    }
+                }
                 
                 val targetHeight = when {
                     quality == "4K" -> "2160"
@@ -177,7 +208,6 @@ class DownloadService : Service() {
                 val tempDir = File(targetDir, ".vdf_temp")
                 if (!tempDir.exists()) tempDir.mkdirs()
 
-                val initialFiles = targetDir.listFiles()?.map { it.absolutePath }?.toSet() ?: emptySet()
                 request.addOption("--trim-filenames", "80")
                 request.addOption("-o", "${tempDir.absolutePath}/%(title,id,uuid)s_${resolutionSignature}_vdf.%(ext)s")
                 request.addOption("--concurrent-fragments", "1")
@@ -364,9 +394,10 @@ class DownloadService : Service() {
             val lastState = DownloadManager.activeDownloads.value[url]
             val progress = if (lastState is DownloadState.Downloading) lastState.progress * 100f else 0f
             val quality = activeQualities.remove(url) ?: "1080p"
+            val thumbUrl = DownloadManager.downloadThumbnails.value[url] ?: ""
             
             PauseRepository(applicationContext).savePausedDownload(
-                PausedDownload(url, "Video", quality, progress)
+                PausedDownload(url, "Video", quality, progress, thumbUrl)
             )
             DownloadManager.updateDownloadState(url, DownloadState.Cancelled)
             DownloadManager.removeDownload(url)
