@@ -41,9 +41,13 @@ object UserAgentManager {
     }
 
     /**
-     * Resolves the effective User-Agent to pass to yt-dlp based on platform policy and saved preferences.
+     * Resolves the effective User-Agent to pass to yt-dlp based on platform policy and authentication state.
      */
-    fun getEffectiveUserAgentForDomain(context: Context, domainKey: String): String {
+    fun getEffectiveUserAgentForDomain(context: Context, domainKey: String, isAuthenticated: Boolean = false): String {
+        if (!isAuthenticated) {
+            // Unauthenticated requests use mobile User-Agent to allow public guest viewing without triggering desktop login walls
+            return MOBILE_USER_AGENT
+        }
         return getBrowserUserAgentForDomain(context, domainKey)
     }
 

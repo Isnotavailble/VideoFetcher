@@ -53,6 +53,22 @@ class PermissionManager(private val context: Context) {
         prefs.edit { putBoolean("resolution_selection_enabled", enabled) }
     }
 
+    fun isBypassSslEnabled(): Boolean {
+        return prefs.getBoolean("bypass_ssl_certificate", false) // Default is Standard SSL Validation
+    }
+
+    fun setBypassSslEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean("bypass_ssl_certificate", enabled) }
+    }
+
+    fun isBypassExtractorEnabled(): Boolean {
+        return prefs.getBoolean("bypass_extractor_check", true) // Default is ON (true) for faster initialization
+    }
+
+    fun setBypassExtractorEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean("bypass_extractor_check", enabled) }
+    }
+
     /**
      * Takes a URI granted from ACTION_OPEN_DOCUMENT_TREE, makes the permission persistent,
      * and saves its string representation to SharedPreferences.

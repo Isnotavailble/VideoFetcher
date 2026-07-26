@@ -63,11 +63,6 @@ class QuickDownloadActivity : ComponentActivity() {
         
         settingsManager = SettingsManager(applicationContext)
 
-        // Asynchronously restore surviving persistent cookie backups into private app storage on launch
-        lifecycleScope.launch(Dispatchers.IO) {
-            com.videofetcher.cookies.NetscapeCookieWriter.restoreAllBackupsToPrivateStorage(applicationContext)
-        }
-
         var sharedUrl = ""
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
@@ -90,17 +85,7 @@ class QuickDownloadActivity : ComponentActivity() {
             val isDarkTheme by settingsManager.isDark.collectAsState(initial = initialDarkTheme)
 
             // HEAD START: Silently initialize the engine while the user is looking at the UI.
-            // If they are fast, the Service will finish it. If they are slow, it will be ready!
-            LaunchedEffect(Unit) {
-                launch(Dispatchers.IO) {
-                    try {
-                        YoutubeDL.getInstance().init(applicationContext)
-                        FFmpeg.getInstance().init(applicationContext)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
-            }
+
 
             VideoFetcherTheme(darkTheme = isDarkTheme) {
                 val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -117,7 +102,6 @@ class QuickDownloadActivity : ComponentActivity() {
                 val engineUpdateState by viewModel.engineUpdateState.collectAsState()
 
                 LaunchedEffect(Unit) {
-                    viewModel.initializeEngine(context.applicationContext)
                     viewModel.checkForEngineUpdate(context.applicationContext)
                 }
 

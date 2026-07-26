@@ -2,10 +2,15 @@ package com.videofetcher
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.media.MediaScannerConnection
+import android.media.MediaMetadataRetriever
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import java.io.FileOutputStream
 import android.os.Build
 import android.os.Environment
 import android.os.IBinder
@@ -16,6 +21,7 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
@@ -51,6 +57,10 @@ class DownloadService : Service() {
             "CANCEL_DOWNLOAD" -> cancelDownload(url)
             "START_DOWNLOAD" -> {
                 val quality = intent.getStringExtra("QUALITY") ?: "1080p"
+                val thumbnailUrl = intent.getStringExtra("THUMBNAIL_URL") ?: ""
+                if (thumbnailUrl.isNotBlank()) {
+                    DownloadManager.updateDownloadThumbnail(url, thumbnailUrl)
+                }
                 
                 if (activeJobs.containsKey(url) || pendingQueue.any { it.first == url }) {
                     return START_NOT_STICKY // Already active or queued
@@ -75,20 +85,17 @@ class DownloadService : Service() {
         activeQualities[url] = quality
         DownloadManager.updateDownloadState(url, DownloadState.Downloading(0f, "0% • Starting..."))
         
-        val initialNotification = createNotification("0% • Starting...", 0)
+        val initialNotification = createNotification("Starting Download...", "0% • Starting...", 0)
         startForeground(notificationId, initialNotification.build())
         
         val job = serviceScope.launch {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             
             try {
-                // SAFETY NET: Ensure engine is initialized before attempting download.
-                // This takes a few seconds on first launch, but is nearly instant on subsequent runs.
-                try {
-                    YoutubeDL.getInstance().init(applicationContext)
-                    FFmpeg.getInstance().init(applicationContext)
-                } catch (e: Exception) {
-                    throw Exception("Failed to initialize engine: ${e.message}")
+                // Non-blocking suspend until engine is fully loaded or error
+                val currentEngineState = DownloadManager.engineState.first { it !is EngineState.Initializing }
+                if (currentEngineState is EngineState.Error) {
+                    throw Exception("Engine is not ready: ${currentEngineState.message}")
                 }
 
                 val permissionManager = PermissionManager(applicationContext)
@@ -96,11 +103,15 @@ class DownloadService : Service() {
                 val targetDir = File(customPath)
                 if (!targetDir.exists()) targetDir.mkdirs()
 
-                val targetUrl = resolveCanonicalUrl(url)
-                val request = YoutubeDLRequest(targetUrl)
+                val cleanUrl = try {
+                    android.net.Uri.parse(url).buildUpon().clearQuery().build().toString()
+                } catch (e: Exception) {
+                    url
+                }
+                val request = YoutubeDLRequest(cleanUrl)
                 
-                val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(targetUrl)
-                val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, targetUrl)
+                val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl)
+                val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, cleanUrl)
                 if (platformCookieFile != null) {
                     request.addOption("--cookies", platformCookieFile.absolutePath)
                     val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(applicationContext, domainKey)
@@ -108,9 +119,49 @@ class DownloadService : Service() {
                     request.addOption("--retries", "3")
                     request.addOption("--fragment-retries", "5")
                 }
-                
-                // Force IPv4 to prevent 15-30s timeout hangs on mobile network IPv6 addresses
-                request.addOption("--force-ipv4")
+
+                // Global Speed Optimizations
+                request.addOption("--no-playlist")
+                request.addOption("--no-warnings")
+                request.addOption("--buffer-size", "64K")
+                if (domainKey.lowercase() != "instagram") {
+                    request.addOption("--force-ipv4")
+                }
+
+                // User Preference Speed Toggles
+                if (permissionManager.isBypassSslEnabled()) {
+                    request.addOption("--no-check-certificates")
+                }
+                if (permissionManager.isBypassExtractorEnabled() && domainKey.lowercase() !in listOf("youtube", "facebook", "instagram", "tiktok")) {
+                    request.addOption("--force-generic-extractor")
+                }
+
+                // Asynchronously fetch real video thumbnail in isolated background job (does not block download execution)
+                if (DownloadManager.downloadThumbnails.value[url].isNullOrBlank()) {
+                    serviceScope.launch(Dispatchers.IO) {
+                        try {
+                            val infoReq = YoutubeDLRequest(cleanUrl).apply {
+                                addOption("--no-playlist")
+                                addOption("--no-warnings")
+                                if (domainKey.lowercase() != "instagram") {
+                                    addOption("--force-ipv4")
+                                }
+                                if (platformCookieFile != null) {
+                                    addOption("--cookies", platformCookieFile.absolutePath)
+                                    val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(applicationContext, domainKey)
+                                    addOption("--user-agent", effectiveUserAgent)
+                                }
+                            }
+                            val videoInfo = YoutubeDL.getInstance().getInfo(infoReq)
+                            val fetchedThumb = videoInfo.thumbnail ?: ""
+                            if (fetchedThumb.isNotBlank()) {
+                                DownloadManager.updateDownloadThumbnail(url, fetchedThumb)
+                            }
+                        } catch (e: Exception) {
+                            // Silently ignore thumbnail fetch errors
+                        }
+                    }
+                }
                 
                 val targetHeight = when {
                     quality == "4K" -> "2160"
@@ -131,8 +182,8 @@ class DownloadService : Service() {
                 }
 
                 if (quality == "Best Quality") {
-                    // Cap automatic "Best Quality" to max 1080p for mobile playback hardware compatibility, with /best/b fallback for Facebook/TikTok/IG
-                    request.addOption("-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best/b")
+                    // Cap automatic "Best Quality" to max 1080p for mobile playback hardware compatibility with pre-merged b/best fallback
+                    request.addOption("-f", "b/best/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]")
                 } else if (quality == "Best Quality (M4A)") {
                     request.addOption("-f", "bestaudio[ext=m4a]/bestaudio/best")
                     request.addOption("--extract-audio")
@@ -147,8 +198,8 @@ class DownloadService : Service() {
                         "Audio (MP3) - Fast" -> request.addOption("--audio-quality", "128K")
                     }
                 } else {
-                    // Force H.264/AVC compatible codecs for Android gallery support with universal /best/b fallback for all platforms
-                    request.addOption("-f", "bestvideo[height<=$targetHeight][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=$targetHeight]+bestaudio/best[height<=$targetHeight]/best/b")
+                    // Force H.264/AVC compatible codecs for Android gallery support with pre-merged b/best fallback
+                    request.addOption("-f", "b/best/bestvideo[height<=$targetHeight][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=$targetHeight]+bestaudio/best[height<=$targetHeight]")
                 }
                 
                 // Embed thumbnail safely by converting WebP thumbnails to JPG first via FFmpeg
@@ -158,15 +209,16 @@ class DownloadService : Service() {
                 if (quality != "Best Quality (M4A)" && !quality.startsWith("Audio (MP3)")) {
                     request.addOption("--merge-output-format", "mp4")
                 }
-                val initialFiles = targetDir.listFiles()?.map { it.absolutePath }?.toSet() ?: emptySet()
-                request.addOption("--restrict-filenames")
-                request.addOption("-o", "${targetDir.absolutePath}/%(title,id,uuid)s_${resolutionSignature}_vdf.%(ext)s")
+                val tempDir = File(targetDir, ".vdf_temp")
+                if (!tempDir.exists()) tempDir.mkdirs()
+
+                request.addOption("--trim-filenames", "80")
+                request.addOption("-o", "${tempDir.absolutePath}/%(title,id,uuid)s_${resolutionSignature}_vdf.%(ext)s")
                 request.addOption("--concurrent-fragments", "1")
                 request.addOption("--http-chunk-size", "10M")
 
                 var downloadFinished = false
                 var lastUpdateTime = 0L
-                var lastProgress = -1f
 
                 try {
                     YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
@@ -174,28 +226,35 @@ class DownloadService : Service() {
                             return@execute
                         }
 
+                        val trimmedLine = line.trim()
                         val isFinishedDownload = line.contains("[download] 100%") || line.contains("100% of") || progress >= 100f
                         val isConverting = line.contains("[ffmpeg]") || line.contains("Merging")
                         if (isFinishedDownload) downloadFinished = true
 
                         val currentTime = System.currentTimeMillis()
 
-                        if (isConverting || isFinishedDownload || (currentTime - lastUpdateTime > 500 && progress != lastProgress)) {
+                        if (isConverting || isFinishedDownload || trimmedLine.isNotEmpty() || (currentTime - lastUpdateTime > 200)) {
                             lastUpdateTime = currentTime
-                            lastProgress = progress
 
-                            val statusText = if (isConverting) {
+                            val statusText = if (trimmedLine.isNotEmpty()) {
+                                if (progress > 0f && !isConverting) {
+                                    "${String.format("%.1f", progress)}% • $trimmedLine"
+                                } else {
+                                    trimmedLine
+                                }
+                            } else if (isConverting) {
                                 "Converting & Merging... Please wait"
                             } else {
                                 "${String.format("%.1f", progress)}% • ETA: ${etaInSeconds}s"
                             }
 
                             DownloadManager.updateDownloadState(url, DownloadState.Downloading(
-                                progress = if (isConverting) 1f else (progress / 100f),
+                                progress = if (isConverting) 1f else (progress / 100f).coerceIn(0f, 1f),
                                 status = statusText
                             ))
 
-                            val notification = createNotification(statusText, progress.toInt())
+                            val titleText = if (isConverting) "Converting & Merging..." else "Downloading Video..."
+                            val notification = createNotification(titleText, statusText, progress.toInt())
                             notificationManager.notify(notificationId, notification.build())
                         }
                     }
@@ -214,24 +273,111 @@ class DownloadService : Service() {
                 }
 
                 if (isActive) {
-                    // Verify new file created during this job exists on disk
-                    val matchingFile = targetDir.listFiles()?.firstOrNull { it.absolutePath !in initialFiles && it.name.contains("_vdf.") && it.length() > 0 }
-                    if (downloadFinished && matchingFile != null && matchingFile.exists()) {
+                    val tempOutputFile = tempDir.listFiles()?.firstOrNull { it.isFile && it.name.contains("_vdf.") && it.length() > 0 }
+                    if (downloadFinished && tempOutputFile != null && tempOutputFile.exists()) {
+                        val originalName = tempOutputFile.name
+                        val ext = tempOutputFile.extension
+                        val nameWithoutExt = tempOutputFile.nameWithoutExtension
+
+                        val (baseName, vdfSuffix) = if (nameWithoutExt.endsWith("_vdf", ignoreCase = true)) {
+                            nameWithoutExt.substring(0, nameWithoutExt.length - 4) to "_vdf"
+                        } else {
+                            nameWithoutExt to ""
+                        }
+
+                        var destFile = File(targetDir, originalName)
+                        var counter = 1
+                        while (destFile.exists()) {
+                            destFile = File(targetDir, "${baseName}_${counter}${vdfSuffix}.${ext}")
+                            counter++
+                        }
+
+                        val moved = tempOutputFile.renameTo(destFile)
+                        if (!moved) {
+                            tempOutputFile.copyTo(destFile, overwrite = true)
+                            tempOutputFile.delete()
+                        }
+                        tempDir.deleteRecursively()
+
+                        // Pre-extract local video/audio thumbnail directly from saved file for instant Files tab rendering
+                        try {
+                            val thumbCacheDir = File(cacheDir, "thumbnails")
+                            if (!thumbCacheDir.exists()) thumbCacheDir.mkdirs()
+                            val thumbFile = File(thumbCacheDir, "${destFile.name}.jpg")
+                            val ext = destFile.extension.lowercase()
+                            if (!thumbFile.exists()) {
+                                var bitmap: Bitmap? = null
+
+                                // 1. Try web thumbnail URL fetched during download first (works for audio & video downloaded from web links)
+                                val webThumbUrl = DownloadManager.downloadThumbnails.value[url] ?: ""
+                                if (webThumbUrl.isNotBlank()) {
+                                    try {
+                                        val input = java.net.URL(webThumbUrl).openStream()
+                                        bitmap = BitmapFactory.decodeStream(input)
+                                    } catch (e: Exception) {
+                                        bitmap = null
+                                    }
+                                }
+
+                                // 2. Fallback to local frame / embedded picture extraction
+                                if (bitmap == null) {
+                                    val retriever = MediaMetadataRetriever()
+                                    try {
+                                        retriever.setDataSource(destFile.absolutePath)
+                                        bitmap = if (ext in listOf("mp3", "m4a", "flac", "aac")) {
+                                            val pictureBytes = retriever.embeddedPicture
+                                            if (pictureBytes != null) {
+                                                BitmapFactory.decodeByteArray(pictureBytes, 0, pictureBytes.size)
+                                            } else null
+                                        } else {
+                                            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
+                                            val timeUs = if (durationMs > 2000) (durationMs / 2) * 1000 else 1000000L
+                                            retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                        }
+                                    } finally {
+                                        try { retriever.release() } catch (e: Exception) {}
+                                    }
+                                }
+
+                                if (bitmap != null) {
+                                    val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 250, 250, true)
+                                    FileOutputStream(thumbFile).use { out ->
+                                        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                                    }
+                                    if (scaledBitmap != bitmap) bitmap.recycle()
+                                    scaledBitmap.recycle()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+
                         DownloadManager.updateDownloadState(url, DownloadState.Success("Video successfully saved!"))
 
+                        val clickIntent = Intent(this@DownloadService, MainActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        }
+                        val pendingIntent = PendingIntent.getActivity(
+                            this@DownloadService,
+                            0,
+                            clickIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                        )
+
                         val successNotification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
-                            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                            .setSmallIcon(R.mipmap.ic_launcher)
                             .setContentTitle("Video Downloaded")
                             .setContentText("Successfully saved to ${targetDir.name}")
+                            .setContentIntent(pendingIntent)
+                            .setAutoCancel(true)
                             .build()
                         notificationManager.notify(notificationId + 1, successNotification)
                         notificationManager.cancel(notificationId)
 
                         // Trigger MediaStore scan via absolute path so gallery sees the file
-                        val scanPath = matchingFile.absolutePath
                         MediaScannerConnection.scanFile(
                             applicationContext,
-                            arrayOf(scanPath),
+                            arrayOf(destFile.absolutePath),
                             null
                         ) { _, _ -> DownloadManager.triggerFileRefresh() }
                     } else {
@@ -257,6 +403,27 @@ class DownloadService : Service() {
                     }
                     
                     DownloadManager.updateDownloadState(url, DownloadState.Error(friendlyMessage))
+
+                    val clickIntent = Intent(this@DownloadService, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    }
+                    val pendingIntent = PendingIntent.getActivity(
+                        this@DownloadService,
+                        0,
+                        clickIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+
+                    val errorNotification = NotificationCompat.Builder(this@DownloadService, CHANNEL_ID)
+                        .setSmallIcon(R.mipmap.ic_launcher)
+                        .setContentTitle("Download Failed")
+                        .setContentText(friendlyMessage)
+                        .setStyle(NotificationCompat.BigTextStyle().bigText(friendlyMessage))
+                        .setContentIntent(pendingIntent)
+                        .setAutoCancel(true)
+                        .build()
+
+                    notificationManager.notify(notificationId + 2, errorNotification)
                     notificationManager.cancel(notificationId)
                 }
             } finally {
@@ -284,9 +451,10 @@ class DownloadService : Service() {
             val lastState = DownloadManager.activeDownloads.value[url]
             val progress = if (lastState is DownloadState.Downloading) lastState.progress * 100f else 0f
             val quality = activeQualities.remove(url) ?: "1080p"
+            val thumbUrl = DownloadManager.downloadThumbnails.value[url] ?: ""
             
             PauseRepository(applicationContext).savePausedDownload(
-                PausedDownload(url, "Video", quality, progress)
+                PausedDownload(url, "Video", quality, progress, thumbUrl)
             )
             DownloadManager.updateDownloadState(url, DownloadState.Cancelled)
             DownloadManager.removeDownload(url)
@@ -326,13 +494,24 @@ class DownloadService : Service() {
         }
     }
 
-    private fun createNotification(status: String, progress: Int): NotificationCompat.Builder {
+    private fun createNotification(title: String, status: String, progress: Int): NotificationCompat.Builder {
+        val clickIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            clickIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Downloading Video...")
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
             .setContentText(status)
             .setProgress(100, progress, false) // Solid progress bar right from 0%
             .setColor(android.graphics.Color.parseColor("#2196F3")) // Standard Download Blue
+            .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
     }
@@ -352,35 +531,5 @@ class DownloadService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         serviceJob.cancel()
-    }
-
-    private fun resolveCanonicalUrl(url: String): String {
-        if (!url.contains("facebook.com/share") && !url.contains("fb.watch") && !url.contains("youtu.be") && !url.contains("instagr.am")) {
-            return url
-        }
-        return try {
-            var current = url
-            var redirects = 0
-            while (redirects < 5) {
-                val conn = java.net.URL(current).openConnection() as java.net.HttpURLConnection
-                conn.instanceFollowRedirects = false
-                conn.requestMethod = "HEAD"
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                conn.connectTimeout = 4000
-                conn.readTimeout = 4000
-                val code = conn.responseCode
-                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
-                    val loc = conn.getHeaderField("Location")
-                    if (!loc.isNullOrBlank()) {
-                        current = if (loc.startsWith("http")) loc else "https://www.facebook.com$loc"
-                        redirects++
-                    } else break
-                } else break
-                conn.disconnect()
-            }
-            current
-        } catch (e: Exception) {
-            url
-        }
     }
 }

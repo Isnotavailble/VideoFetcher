@@ -51,13 +51,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.SubcomposeAsyncImage
+import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.transform.RoundedCornersTransformation
 import kotlinx.coroutines.delay
@@ -176,8 +178,6 @@ fun VideoDownloaderUI(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.initializeEngine(context.applicationContext)
-        
         val missingStorage = storagePermissions.filter {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray()
@@ -424,16 +424,10 @@ fun HomeContent(
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    SubcomposeAsyncImage(
-                                        model = ImageRequest.Builder(LocalContext.current)
-                                            .data(state.thumbnailUrl)
-                                            .crossfade(true)
-                                            .build(),
-                                        contentDescription = "Video Thumbnail",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)),
-                                        loading = { Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))) },
-                                        error = { Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))) }
+                                    VideoThumbnailBox(
+                                        imageData = state.thumbnailUrl,
+                                        isAudio = false,
+                                        size = 60.dp
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
@@ -689,8 +683,6 @@ fun HomeContent(
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface
         )
-        Spacer(modifier = Modifier.height(8.dp))
-
         LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(bottom = 16.dp)) {
             if (engineState is EngineState.Initializing) {
                 item { InitializingCard(); Spacer(modifier = Modifier.height(16.dp)) }
@@ -753,11 +745,13 @@ fun FilesContent(
                     
                     // Permission saved! Automatically retry the deletion silently
                     fileAwaitingPermission?.let { fileToDelete ->
+                        val isAudio = fileToDelete.path.contains("(MP3", ignoreCase = true) || fileToDelete.path.contains("(M4A", ignoreCase = true) || fileToDelete.path.endsWith(".mp3", ignoreCase = true) || fileToDelete.path.endsWith(".m4a", ignoreCase = true)
+                        val typeLabel = if (isAudio) "Audio" else "Video"
                         viewModel.deleteVideo(
                             context = context.applicationContext,
                             fileDetails = fileToDelete,
                             onSuccess = {
-                                Toast.makeText(context, "Video deleted", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "$typeLabel deleted", Toast.LENGTH_SHORT).show()
                                 viewModel.fetchDownloadedFiles(context.applicationContext)
                             },
                             onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
@@ -782,7 +776,7 @@ fun FilesContent(
                 fileAwaitingPermission = null
             },
             title = { Text("Grant Folder Access", fontWeight = FontWeight.Bold) },
-            text = { Text("To delete videos downloaded from a previous installation, we need access to the VideoFetcher folder.\n\nPlease tap 'Continue', select the 'VideoFetcher' folder, and tap 'Use this folder'.") },
+            text = { Text("To delete files downloaded from a previous installation, we need access to the VideoFetcher folder.\n\nPlease tap 'Continue', select the 'VideoFetcher' folder, and tap 'Use this folder'.") },
             confirmButton = {
                 TextButton(onClick = {
                     showFolderInstructionDialog = false
@@ -803,9 +797,14 @@ fun FilesContent(
     }
 
     if (fileToConfirmDelete != null) {
+        val isAudio = fileToConfirmDelete?.path?.let {
+            it.contains("(MP3", ignoreCase = true) || it.contains("(M4A", ignoreCase = true) || it.endsWith(".mp3", ignoreCase = true) || it.endsWith(".m4a", ignoreCase = true)
+        } == true
+        val typeLabel = if (isAudio) "Audio" else "Video"
+
         AlertDialog(
             onDismissRequest = { fileToConfirmDelete = null },
-            title = { Text("Delete Video", fontWeight = FontWeight.Bold) },
+            title = { Text("Delete $typeLabel", fontWeight = FontWeight.Bold) },
             text = { Text("Are you sure you want to delete '${fileToConfirmDelete?.title}'?\nThis action cannot be undone.") },
             confirmButton = {
                 TextButton(
@@ -816,14 +815,14 @@ fun FilesContent(
                             context = context.applicationContext,
                             fileDetails = fileToDelete,
                             onSuccess = {
-                                Toast.makeText(context, "Video deleted", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "$typeLabel deleted", Toast.LENGTH_SHORT).show()
                                 viewModel.fetchDownloadedFiles(context.applicationContext)
                             },
-                                onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
-                                onPermissionRequired = {
-                                    fileAwaitingPermission = fileToDelete
-                                    showFolderInstructionDialog = true
-                                }
+                            onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
+                            onPermissionRequired = {
+                                fileAwaitingPermission = fileToDelete
+                                showFolderInstructionDialog = true
+                            }
                         )
                     }
                 ) {
@@ -836,6 +835,16 @@ fun FilesContent(
                 }
             }
         )
+    }
+
+    val (videoFiles, audioFiles) = remember(filesListState) {
+        if (filesListState is FilesListState.Success) {
+            val videoRegex = Regex(".*_vdf\\.mp4$", RegexOption.IGNORE_CASE)
+            val audioRegex = Regex(".*_vdf\\.(?!mp4)[^.]+$", RegexOption.IGNORE_CASE)
+            filesListState.files.filter { it.path.matches(videoRegex) } to filesListState.files.filter { it.path.matches(audioRegex) }
+        } else {
+            emptyList<DownloadedFileDetails>() to emptyList<DownloadedFileDetails>()
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -873,7 +882,7 @@ fun FilesContent(
 
             if (pausedDownloads.isNotEmpty()) {
                 item { Text("Paused Videos", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(bottom = 8.dp)) }
-                items(items = pausedDownloads, key = { it.url }) { paused ->
+                items(items = pausedDownloads, key = { it.url }, contentType = { "paused_card" }) { paused ->
                     PausedVideoCard(
                         paused = paused,
                         onResume = { viewModel.resumeDownload(context.applicationContext, paused.url, paused.quality) },
@@ -885,12 +894,6 @@ fun FilesContent(
 
             when (val filesList = filesListState) {
                 is FilesListState.Success -> {
-                    val videoRegex = Regex(".*_vdf\\.mp4$", RegexOption.IGNORE_CASE)
-                    val audioRegex = Regex(".*_vdf\\.(?!mp4)[^.]+$", RegexOption.IGNORE_CASE)
-                    
-                    val videoFiles = filesList.files.filter { it.path.matches(videoRegex) }
-                    val audioFiles = filesList.files.filter { it.path.matches(audioRegex) }
-
                     if (filesList.files.isEmpty() && pausedDownloads.isEmpty()) {
                         item { Text("No downloads yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)) }
                     } else {
@@ -920,7 +923,7 @@ fun FilesContent(
                                     Text("No video downloads yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.padding(bottom = 16.dp))
                                 }
                             } else {
-                                items(items = videoFiles, key = { it.path }) { file ->
+                                items(items = videoFiles, key = { it.path }, contentType = { "downloaded_video" }) { file ->
                                     DownloadedVideoCard(
                                         file = file,
                                         viewModel = viewModel,
@@ -957,7 +960,7 @@ fun FilesContent(
                                     Text("No audio downloads yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.padding(bottom = 16.dp))
                                 }
                             } else {
-                                items(items = audioFiles, key = { it.path }) { file ->
+                                items(items = audioFiles, key = { it.path }, contentType = { "downloaded_audio" }) { file ->
                                     DownloadedVideoCard(
                                         file = file,
                                         viewModel = viewModel,
@@ -1064,7 +1067,61 @@ fun SettingsContent(
                 )
             )
         }
-        
+
+        var isBypassSslEnabled by remember { mutableStateOf(permissionManager.isBypassSslEnabled()) }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                Text("Bypass SSL Validation", color = MaterialTheme.colorScheme.onSurface)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Skips certificate checks for faster extraction speed.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
+            }
+            Switch(
+                checked = isBypassSslEnabled,
+                onCheckedChange = { enabled ->
+                    isBypassSslEnabled = enabled
+                    permissionManager.setBypassSslEnabled(enabled)
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary,
+                    checkedBorderColor = Color.Transparent,
+                    uncheckedThumbColor = MaterialTheme.colorScheme.surface,
+                    uncheckedTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                    uncheckedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                )
+            )
+        }
+
+        var isBypassExtractorEnabled by remember { mutableStateOf(permissionManager.isBypassExtractorEnabled()) }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                Text("Direct Link Mode", color = MaterialTheme.colorScheme.onSurface)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Bypasses deep extractor regex checks for instant link parsing.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
+            }
+            Switch(
+                checked = isBypassExtractorEnabled,
+                onCheckedChange = { enabled ->
+                    isBypassExtractorEnabled = enabled
+                    permissionManager.setBypassExtractorEnabled(enabled)
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary,
+                    checkedBorderColor = Color.Transparent,
+                    uncheckedThumbColor = MaterialTheme.colorScheme.surface,
+                    uncheckedTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                    uncheckedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                )
+            )
+        }
+
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
 
         Text("Engine Version", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
@@ -1222,25 +1279,61 @@ fun SettingsContent(
 }
 
 @Composable
+fun VideoThumbnailBox(
+    imageData: Any?,
+    isAudio: Boolean = false,
+    size: Dp = 80.dp
+) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (isAudio) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_earphone),
+                contentDescription = "No Thumbnail",
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                modifier = Modifier.size((size.value * 0.4f).dp)
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = "No Thumbnail",
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                modifier = Modifier.size((size.value * 0.4f).dp)
+            )
+        }
+
+        val hasData = when (imageData) {
+            is String -> imageData.isNotBlank()
+            is Uri -> imageData != Uri.EMPTY
+            else -> imageData != null
+        }
+
+        if (hasData) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(imageData)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "Video Thumbnail",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
+@Composable
 fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: DownloaderViewModel, context: android.content.Context) {
+    val downloadThumbnails by com.videofetcher.DownloadManager.downloadThumbnails.collectAsState()
+    val thumbnailUrl = downloadThumbnails[url]
+
     val isFinished = downloadState is DownloadState.Success || downloadState is DownloadState.Error || downloadState is DownloadState.Cancelled
     val isDownloading = downloadState is DownloadState.Downloading
-
-    val iconColor = when (downloadState) {
-        is DownloadState.Queued -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-        is DownloadState.Downloading -> MaterialTheme.colorScheme.primary
-        is DownloadState.Success -> MaterialTheme.colorScheme.primary
-        is DownloadState.Error -> MaterialTheme.colorScheme.error
-        is DownloadState.Cancelled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-    }
-
-    val iconVector = when (downloadState) {
-        is DownloadState.Queued -> Icons.Filled.Info
-        is DownloadState.Downloading -> null
-        is DownloadState.Success -> Icons.Filled.Check
-        is DownloadState.Error -> Icons.Filled.Warning
-        is DownloadState.Cancelled -> Icons.Filled.Close
-    }
 
     Row(
         modifier = Modifier
@@ -1248,29 +1341,11 @@ fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: Dow
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(80.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)),
-            contentAlignment = Alignment.Center
-        ) {
-            if (downloadState is DownloadState.Downloading) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_download),
-                    contentDescription = "Downloading",
-                    tint = iconColor,
-                    modifier = Modifier.size(32.dp)
-                )
-            } else {
-                Icon(
-                    imageVector = iconVector!!,
-                    contentDescription = "State Icon",
-                    tint = iconColor,
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-        }
+        VideoThumbnailBox(
+            imageData = thumbnailUrl,
+            isAudio = false,
+            size = 80.dp
+        )
 
         Spacer(modifier = Modifier.width(16.dp))
 
@@ -1315,9 +1390,12 @@ fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: Dow
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = state.status,
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                 )
             } else if (downloadState is DownloadState.Error) {
                 Spacer(modifier = Modifier.height(4.dp))
@@ -1329,6 +1407,24 @@ fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: Dow
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Tip: Try toggling VPN ON/OFF or Wi-Fi/Data if download fails.",
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
 
@@ -1494,37 +1590,11 @@ fun DownloadedVideoCard(
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                SubcomposeAsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(if (file.thumbnailUri == Uri.EMPTY) null else file.thumbnailUri)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = "Video Thumbnail",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(80.dp)
-                        .clip(RoundedCornerShape(8.dp)),
-                    loading = {
-                        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                            if (isAudio) {
-                                Icon(painterResource(id = R.drawable.ic_earphone), contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                            } else {
-                                Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                            }
-                        }
-                    },
-                    error = {
-                        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                            if (isAudio) {
-                                Icon(painterResource(id = R.drawable.ic_earphone), contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                            } else {
-                                Icon(Icons.Filled.PlayArrow, contentDescription = "No Thumbnail", tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
-                            }
-                        }
-                    }
-                )
-            }
+            VideoThumbnailBox(
+                imageData = if (file.thumbnailUri == Uri.EMPTY) null else file.thumbnailUri,
+                isAudio = isAudio,
+                size = 80.dp
+            )
 
             Spacer(modifier = Modifier.width(16.dp))
 
@@ -1640,20 +1710,11 @@ fun PausedVideoCard(paused: PausedDownload, onResume: () -> Unit, onCancel: () -
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(80.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = "Paused",
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.size(32.dp)
-                )
-            }
+            VideoThumbnailBox(
+                imageData = paused.thumbnailUrl.ifBlank { null },
+                isAudio = paused.quality.contains("MP3", ignoreCase = true) || paused.quality.contains("M4A", ignoreCase = true),
+                size = 80.dp
+            )
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = "Paused (${paused.quality})", fontWeight = FontWeight.Bold, fontSize = 14.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurface)

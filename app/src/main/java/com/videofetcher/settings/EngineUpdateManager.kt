@@ -75,6 +75,24 @@ class EngineUpdateManager(context: Context) {
     }
 
     /**
+     * Compares installed yt-dlp version with latest GitHub tag and returns EngineUpdateState.
+     */
+    suspend fun checkEngineStatus(context: Context, forceCheck: Boolean = false): com.videofetcher.EngineUpdateState = withContext(Dispatchers.IO) {
+        val currentVersion = try { YoutubeDL.getInstance().version(context) } catch (e: Exception) { null }
+        val latestVersion = fetchLatestVersion(forceCheck)
+
+        if (latestVersion != null) {
+            if (latestVersion != currentVersion) {
+                com.videofetcher.EngineUpdateState.UpdateAvailable(latestVersion)
+            } else {
+                if (forceCheck) com.videofetcher.EngineUpdateState.UpToDate else com.videofetcher.EngineUpdateState.Idle
+            }
+        } else {
+            if (forceCheck) com.videofetcher.EngineUpdateState.Error("Failed to check version. Please check network.") else com.videofetcher.EngineUpdateState.Idle
+        }
+    }
+
+    /**
      * Direct binary downloader: Downloads official yt-dlp release binary directly from
      * yt-dlp/yt-dlp releases (with CDN mirror fallback for ISP blocked regions)
      * and replaces the executable binary in app internal storage.

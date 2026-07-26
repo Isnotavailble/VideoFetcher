@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.ContentUris
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaScannerConnection
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -22,8 +23,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -70,64 +76,21 @@ class DownloaderViewModel : ViewModel() {
     private var fetchJob: Job? = null
     private var analyzeJob: Job? = null
 
-    fun initializeEngine(context: Context) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                YoutubeDL.getInstance().init(context)
-                FFmpeg.getInstance().init(context)
-                if (DownloadManager.engineState.value is EngineState.Initializing) {
-                    DownloadManager.updateEngineState(EngineState.Idle)
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                DownloadManager.updateEngineState(EngineState.Error("Engine failed to boot: ${e.message}"))
-            }
-        }
-    }
-
     fun checkForEngineUpdate(context: Context, forceCheck: Boolean = false) {
         viewModelScope.launch {
             if (forceCheck) {
                 _engineUpdateState.value = EngineUpdateState.Checking
             }
-            
-            val manager = com.videofetcher.settings.EngineUpdateManager(context)
-            val currentVersion = YoutubeDL.getInstance().version(context)
-            val latestVersion = manager.fetchLatestVersion(forceCheck)
-
-            if (latestVersion != null) {
-                if (latestVersion != currentVersion) {
-                    _engineUpdateState.value = EngineUpdateState.UpdateAvailable(latestVersion)
-                } else {
-                    if (forceCheck) {
-                        _engineUpdateState.value = EngineUpdateState.UpToDate
-                    } else {
-                        _engineUpdateState.value = EngineUpdateState.Idle
-                    }
-                }
-            } else {
-                if (forceCheck) {
-                    _engineUpdateState.value = EngineUpdateState.Error("Failed to check version. Please check network.")
-                } else {
-                    _engineUpdateState.value = EngineUpdateState.Idle
-                }
-            }
+            _engineUpdateState.value = com.videofetcher.settings.EngineUpdateManager(context).checkEngineStatus(context, forceCheck)
         }
     }
 
     fun updateEngine(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             _engineUpdateState.value = EngineUpdateState.Updating
-            val manager = com.videofetcher.settings.EngineUpdateManager(context)
-            val success = manager.updateYtDlpDirectly(context)
+            val success = com.videofetcher.settings.EngineUpdateManager(context).updateYtDlpDirectly(context)
             if (success) {
                 _engineUpdateState.value = EngineUpdateState.Success
-                try {
-                    YoutubeDL.getInstance().init(context)
-                    FFmpeg.getInstance().init(context)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
                 delay(2000)
                 _engineUpdateState.value = EngineUpdateState.Idle
             } else {
@@ -158,12 +121,16 @@ class DownloaderViewModel : ViewModel() {
         analyzeJob = viewModelScope.launch(Dispatchers.IO) {
             _videoInfoState.value = VideoInfoState.Fetching
             try {
-                val targetUrl = resolveCanonicalUrl(url)
-                val request = YoutubeDLRequest(targetUrl)
+                val cleanUrl = try {
+                    android.net.Uri.parse(url).buildUpon().clearQuery().build().toString()
+                } catch (e: Exception) {
+                    url
+                }
+                val request = YoutubeDLRequest(cleanUrl)
 
                 if (context != null) {
-                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(targetUrl)
-                    val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, targetUrl)
+                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl)
+                    val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, cleanUrl)
 
                     if (platformCookieFile != null) {
                         request.addOption("--cookies", platformCookieFile.absolutePath)
@@ -174,13 +141,29 @@ class DownloaderViewModel : ViewModel() {
                     }
                 }
                 
-                // 1. Aggressive Pruning (Ignore comments, subtitles, and playlists)
-                request.addOption("--no-playlist")
-                request.addOption("--no-write-subs")
-                request.addOption("--compat-options", "no-youtube-unavailable-videos")
+                val domainKey = if (context != null) com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl) else ""
                 
-                // 2. Force IPv4 to prevent silent 10-second timeout hangs
-                request.addOption("--force-ipv4")
+                // 1. Global Speed Optimizations & Aggressive Pruning
+                request.addOption("--no-playlist")
+                request.addOption("--no-warnings")
+                request.addOption("--buffer-size", "64K")
+                request.addOption("--no-write-subs")
+                
+                // 2. Force IPv4 for non-Instagram requests
+                if (domainKey.lowercase() != "instagram") {
+                    request.addOption("--force-ipv4")
+                }
+
+                // 3. User Preference Speed Toggles
+                if (context != null) {
+                    val permissionManager = PermissionManager(context)
+                    if (permissionManager.isBypassSslEnabled()) {
+                        request.addOption("--no-check-certificates")
+                    }
+                    if (permissionManager.isBypassExtractorEnabled() && domainKey.lowercase() !in listOf("youtube", "facebook", "instagram", "tiktok")) {
+                        request.addOption("--force-generic-extractor")
+                    }
+                }
                 
                 val info = YoutubeDL.getInstance().getInfo(request)
                 
@@ -228,10 +211,20 @@ class DownloaderViewModel : ViewModel() {
     fun startDownload(url: String, quality: String, context: Context) {
         if (url.isBlank()) return
 
+        val currentInfo = _videoInfoState.value
+        val thumbUrl = if (currentInfo is VideoInfoState.Success) currentInfo.thumbnailUrl else ""
+        val titleText = if (currentInfo is VideoInfoState.Success) currentInfo.title else "Video"
+
+        if (thumbUrl.isNotBlank()) {
+            DownloadManager.updateDownloadThumbnail(url, thumbUrl)
+        }
+
         val serviceIntent = Intent(context, DownloadService::class.java).apply {
             action = "START_DOWNLOAD"
             putExtra("URL", url)
             putExtra("QUALITY", quality)
+            putExtra("THUMBNAIL_URL", thumbUrl)
+            putExtra("TITLE", titleText)
         }
         context.startService(serviceIntent)
     }
@@ -358,7 +351,7 @@ class DownloaderViewModel : ViewModel() {
                 val initialList = files.map { file ->
                     existingFilesMap[file.absolutePath] ?: run {
                         val (title, signature) = parseFileName(file.name)
-                        val thumbFile = File(thumbCacheDir, "${file.name}.png")
+                        val thumbFile = File(thumbCacheDir, "${file.name}.jpg")
                         DownloadedFileDetails(
                             title = title,
                             path = file.absolutePath,
@@ -373,74 +366,92 @@ class DownloaderViewModel : ViewModel() {
                 // Immediately update UI with names and sizes
                 _filesListState.value = FilesListState.Success(initialList.toList())
 
-                // STEP 2: Lazy processing - Fetch durations and missing thumbnails in background
-                for (i in files.indices) {
-                    // Skip expensive processing if we already have a valid duration and thumbnail!
-                    if (initialList[i].duration != "--:--" && initialList[i].thumbnailUri != Uri.EMPTY) {
-                        continue
-                    }
+                // STEP 2: Parallel lazy processing with strict CPU throttling (max 2 worker threads)
+                val itemsToProcess = files.indices.filter { i ->
+                    initialList[i].duration == "--:--" || initialList[i].thumbnailUri == Uri.EMPTY
+                }
 
-                    val file = files[i]
-                    val thumbFile = File(thumbCacheDir, "${file.name}.png")
-                    var updatedUri = initialList[i].thumbnailUri
-                    var updatedDuration = initialList[i].duration
+                if (itemsToProcess.isNotEmpty()) {
+                    val semaphore = Semaphore(2)
+                    coroutineScope {
+                        itemsToProcess.map { i ->
+                            async(Dispatchers.IO) {
+                                semaphore.withPermit {
+                                    val file = files[i]
+                                    val thumbFile = File(thumbCacheDir, "${file.name}.jpg")
+                                    var updatedUri = initialList[i].thumbnailUri
+                                    var updatedDuration = initialList[i].duration
 
-                    val retriever = MediaMetadataRetriever()
-                    try {
-                        var fileReadable = false
-                        var attempts = 0
-                        while (!fileReadable && attempts < 10) {
-                            try {
-                                val ext = file.extension.lowercase()
-                                val mimeType = if (ext in listOf("mp3", "m4a")) "audio/*" else "video/*"
-                                val uri = getFileUri(context, file.absolutePath, mimeType)
-                                
-                                if (uri != null) {
-                                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                                        retriever.setDataSource(pfd.fileDescriptor)
-                                        fileReadable = true
+                                    val retriever = MediaMetadataRetriever()
+                                    try {
+                                        var fileReadable = false
+                                        var attempts = 0
+                                        while (!fileReadable && attempts < 2) {
+                                            try {
+                                                val ext = file.extension.lowercase()
+                                                val mimeType = if (ext in listOf("mp3", "m4a")) "audio/*" else "video/*"
+                                                val uri = getFileUri(context, file.absolutePath, mimeType)
+                                                
+                                                if (uri != null) {
+                                                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                                                        retriever.setDataSource(pfd.fileDescriptor)
+                                                        fileReadable = true
+                                                    }
+                                                }
+                                                
+                                                if (!fileReadable) {
+                                                    retriever.setDataSource(file.absolutePath)
+                                                    fileReadable = true
+                                                }
+                                            } catch (e: Exception) {
+                                                attempts++
+                                                if (attempts < 2) delay(50)
+                                            }
+                                        }
+
+                                        if (fileReadable) {
+                                            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
+                                            updatedDuration = formatDuration(durationMs)
+
+                                            if (!thumbFile.exists()) {
+                                                val ext = file.extension.lowercase()
+                                                val bitmap: Bitmap? = if (ext in listOf("mp3", "m4a", "flac", "aac")) {
+                                                    val pictureBytes = retriever.embeddedPicture
+                                                    if (pictureBytes != null) {
+                                                        BitmapFactory.decodeByteArray(pictureBytes, 0, pictureBytes.size)
+                                                    } else null
+                                                } else {
+                                                    val timeUs = if (durationMs > 2000) (durationMs / 2) * 1000 else 1000000L
+                                                    retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                                }
+
+                                                if (bitmap != null) {
+                                                    val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 250, 250, true)
+                                                    FileOutputStream(thumbFile).use { out ->
+                                                        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                                                    }
+                                                    if (scaledBitmap != bitmap) scaledBitmap.recycle()
+                                                    scaledBitmap.recycle()
+                                                    updatedUri = Uri.fromFile(thumbFile)
+                                                }
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    } finally {
+                                        try { retriever.release() } catch (e: Exception) {}
+                                    }
+
+                                    if (updatedDuration != initialList[i].duration || updatedUri != initialList[i].thumbnailUri) {
+                                        synchronized(initialList) {
+                                            initialList[i] = initialList[i].copy(duration = updatedDuration, thumbnailUri = updatedUri)
+                                            _filesListState.value = FilesListState.Success(initialList.toList())
+                                        }
                                     }
                                 }
-                                
-                                if (!fileReadable) {
-                                    retriever.setDataSource(file.absolutePath)
-                                    fileReadable = true
-                                }
-                            } catch (e: Exception) {
-                                attempts++
-                                if (attempts < 10) delay(500)
                             }
-                        }
-
-                        if (fileReadable) {
-                            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0L
-                            updatedDuration = formatDuration(durationMs)
-
-                            if (!thumbFile.exists()) {
-                                val timeUs = if (durationMs > 2000) (durationMs / 2) * 1000 else 1000000L
-                                val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                                if (bitmap != null) {
-                                    FileOutputStream(thumbFile).use { out ->
-                                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                                    }
-                                    updatedUri = Uri.fromFile(thumbFile)
-                                }
-                            }
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    } finally {
-                        try { retriever.release() } catch (e: Exception) {}
+                        }.awaitAll()
                     }
-
-                    // Only update the state if something actually changed
-                    if (updatedDuration != initialList[i].duration || updatedUri != initialList[i].thumbnailUri) {
-                        initialList[i] = initialList[i].copy(duration = updatedDuration, thumbnailUri = updatedUri)
-                        _filesListState.value = FilesListState.Success(initialList.toList())
-                    }
-                    
-                    // Add a tiny delay to let Garbage Collection clean up Bitmaps to prevent OOM
-                    delay(50)
                 }
             } catch (e: Exception) {
                 // Ignore Coroutine cancellations so they don't trigger the Error UI
@@ -713,38 +724,6 @@ class DownloaderViewModel : ViewModel() {
         if (currentState is FilesListState.Success) {
             val updatedList = currentState.files.filter { it.path != fileDetails.path }
             _filesListState.value = FilesListState.Success(updatedList)
-        }
-    }
-
-    private suspend fun resolveCanonicalUrl(url: String): String {
-        if (!url.contains("facebook.com/share") && !url.contains("fb.watch") && !url.contains("youtu.be") && !url.contains("instagr.am")) {
-            return url
-        }
-        return withContext(Dispatchers.IO) {
-            try {
-                var current = url
-                var redirects = 0
-                while (redirects < 5) {
-                    val conn = java.net.URL(current).openConnection() as java.net.HttpURLConnection
-                    conn.instanceFollowRedirects = false
-                    conn.requestMethod = "HEAD"
-                    conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-                    conn.connectTimeout = 4000
-                    conn.readTimeout = 4000
-                    val code = conn.responseCode
-                    if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
-                        val loc = conn.getHeaderField("Location")
-                        if (!loc.isNullOrBlank()) {
-                            current = if (loc.startsWith("http")) loc else "https://www.facebook.com$loc"
-                            redirects++
-                        } else break
-                    } else break
-                    conn.disconnect()
-                }
-                current
-            } catch (e: Exception) {
-                url
-            }
         }
     }
 }
