@@ -131,14 +131,20 @@ class DownloaderViewModel : ViewModel() {
                 if (context != null) {
                     val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl)
                     val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, cleanUrl)
+                    val hasCookies = platformCookieFile?.exists() == true && platformCookieFile.length() > 0
 
-                    if (platformCookieFile != null) {
+                    if (platformCookieFile != null && hasCookies) {
                         request.addOption("--cookies", platformCookieFile.absolutePath)
-                        val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, domainKey)
-                        request.addOption("--user-agent", effectiveUserAgent)
                         request.addOption("--retries", "3")
                         request.addOption("--fragment-retries", "5")
                     }
+
+                    val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(
+                        context,
+                        domainKey,
+                        isAuthenticated = hasCookies
+                    )
+                    request.addOption("--user-agent", effectiveUserAgent)
                 }
                 
                 val domainKey = if (context != null) com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl) else ""

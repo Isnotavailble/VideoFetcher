@@ -25,13 +25,11 @@ object UserAgentManager {
     }
 
     /**
-     * Resolves the User-Agent for WebView login to match yt-dlp policy.
+     * Resolves the User-Agent for WebView login.
+     * Uses Mobile UA so users get a clean, touch-friendly mobile login screen.
      */
     fun getBrowserUserAgentForDomain(context: Context, domainKey: String): String {
         val cleanKey = domainKey.lowercase()
-        if (requiresDesktopUserAgent(cleanKey)) {
-            return DESKTOP_USER_AGENT
-        }
         val prefs = getPrefs(context)
         val domainSpecific = prefs.getString("user_agent_$cleanKey", null)
         if (!domainSpecific.isNullOrBlank()) return domainSpecific
@@ -41,11 +39,17 @@ object UserAgentManager {
     }
 
     /**
-     * Resolves the effective User-Agent to pass to yt-dlp based on platform policy and authentication state.
+     * Resolves the effective User-Agent to pass to yt-dlp.
+     * Facebook ALWAYS uses DESKTOP_USER_AGENT for yt-dlp scraping sessions (both authenticated and unauthenticated)
+     * so yt-dlp can parse www.facebook.com desktop video structures.
      */
     fun getEffectiveUserAgentForDomain(context: Context, domainKey: String, isAuthenticated: Boolean = false): String {
+        val cleanKey = domainKey.lowercase()
+        if (requiresDesktopUserAgent(cleanKey)) {
+            return DESKTOP_USER_AGENT
+        }
         if (!isAuthenticated) {
-            // Unauthenticated requests use mobile User-Agent to allow public guest viewing without triggering desktop login walls
+            // Unauthenticated requests for non-Facebook domains use mobile User-Agent for public guest viewing
             return MOBILE_USER_AGENT
         }
         return getBrowserUserAgentForDomain(context, domainKey)
@@ -53,12 +57,11 @@ object UserAgentManager {
 
     /**
      * Saves domain-specific User-Agent and backs it up into .useragent/ folder.
-     * Enforces Desktop UA policy if required by the target platform.
      */
     fun saveUserAgentForDomain(context: Context, domainKey: String, userAgent: String) {
         if (domainKey.isBlank()) return
         val cleanKey = domainKey.lowercase()
-        val targetUA = if (requiresDesktopUserAgent(cleanKey)) DESKTOP_USER_AGENT else userAgent.ifBlank { MOBILE_USER_AGENT }
+        val targetUA = userAgent.ifBlank { MOBILE_USER_AGENT }
 
         getPrefs(context).edit {
             putString("user_agent_$cleanKey", targetUA)
@@ -72,7 +75,7 @@ object UserAgentManager {
      */
     fun syncUserAgentToBackup(context: Context, domainKey: String, userAgent: String) {
         val cleanKey = domainKey.lowercase()
-        val targetUA = if (requiresDesktopUserAgent(cleanKey)) DESKTOP_USER_AGENT else userAgent
+        val targetUA = userAgent.ifBlank { MOBILE_USER_AGENT }
         try {
             val permissionManager = PermissionManager(context)
             val customPath = permissionManager.getCustomDownloadFolderPath()
@@ -88,7 +91,6 @@ object UserAgentManager {
 
     /**
      * Restores all useragent_<domainKey>.txt backups from .useragent/ into SharedPreferences.
-     * Overwrites platform policy overrides (e.g. Facebook Desktop UA) automatically.
      */
     fun restoreAllUserAgentsToPrivateStorage(context: Context) {
         try {
@@ -99,14 +101,11 @@ object UserAgentManager {
                 backupFolder.listFiles()?.forEach { file ->
                     if (file.name.startsWith("useragent_") && file.name.endsWith(".txt")) {
                         val domainKey = file.name.removePrefix("useragent_").removeSuffix(".txt").lowercase()
-                        val ua = if (requiresDesktopUserAgent(domainKey)) DESKTOP_USER_AGENT else file.readText().trim()
+                        val ua = file.readText().trim()
                         if (ua.isNotBlank() && domainKey.isNotBlank()) {
                             getPrefs(context).edit {
                                 putString("user_agent_$domainKey", ua)
                                 putString(KEY_SAVED_USER_AGENT, ua)
-                            }
-                            if (requiresDesktopUserAgent(domainKey)) {
-                                file.writeText(DESKTOP_USER_AGENT)
                             }
                         }
                     }

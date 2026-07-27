@@ -112,13 +112,20 @@ class DownloadService : Service() {
                 
                 val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl)
                 val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, cleanUrl)
-                if (platformCookieFile != null) {
+                val hasCookies = platformCookieFile?.exists() == true && platformCookieFile.length() > 0
+                
+                if (platformCookieFile != null && hasCookies) {
                     request.addOption("--cookies", platformCookieFile.absolutePath)
-                    val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(applicationContext, domainKey)
-                    request.addOption("--user-agent", effectiveUserAgent)
                     request.addOption("--retries", "3")
                     request.addOption("--fragment-retries", "5")
                 }
+                
+                val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(
+                    applicationContext,
+                    domainKey,
+                    isAuthenticated = hasCookies
+                )
+                request.addOption("--user-agent", effectiveUserAgent)
 
                 // Global Speed Optimizations
                 request.addOption("--no-playlist")
@@ -143,13 +150,12 @@ class DownloadService : Service() {
                             val infoReq = YoutubeDLRequest(cleanUrl).apply {
                                 addOption("--no-playlist")
                                 addOption("--no-warnings")
+                                addOption("--user-agent", effectiveUserAgent)
                                 if (domainKey.lowercase() != "instagram") {
                                     addOption("--force-ipv4")
                                 }
-                                if (platformCookieFile != null) {
+                                if (platformCookieFile != null && hasCookies) {
                                     addOption("--cookies", platformCookieFile.absolutePath)
-                                    val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(applicationContext, domainKey)
-                                    addOption("--user-agent", effectiveUserAgent)
                                 }
                             }
                             val videoInfo = YoutubeDL.getInstance().getInfo(infoReq)
