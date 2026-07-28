@@ -190,8 +190,8 @@ class DownloaderViewModel : ViewModel() {
 
                     if (platformCookieFile != null) {
                         request.addOption("--cookies", platformCookieFile.absolutePath)
-                        request.addOption("--retries", "3")
-                        request.addOption("--fragment-retries", "5")
+                        request.addOption("--retries", "2")
+                        request.addOption("--fragment-retries", "1")
                     }
 
                     val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(

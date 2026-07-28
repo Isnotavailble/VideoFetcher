@@ -287,14 +287,12 @@ object NetscapeCookieWriter {
     fun isAuthException(errorMessage: String?): Boolean {
         if (errorMessage.isNullOrBlank()) return false
         val lower = errorMessage.lowercase()
-        return lower.contains("sign in") ||
-               lower.contains("login required") ||
-               lower.contains("private video") ||
-               lower.contains("authentication") ||
-               lower.contains("cookie") ||
-               lower.contains("401") ||
-               lower.contains("403") ||
-               lower.contains("confirm you")
+        if (lower.contains("sign in") ||
+            lower.contains("login required") ||
+            lower.contains("private video") ||
+            lower.contains("authentication") ||
+            lower.contains("confirm you")) return true
+        return false
     }
 
     /**
