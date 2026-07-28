@@ -33,6 +33,7 @@ import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+private val FILE_SIGNATURE_REGEX = Regex(".*_vdf\\.(mp4|mp3|m4a|aac|flac|opus|wav|ogg|mkv|webm|3gp)$", RegexOption.IGNORE_CASE)
 
 sealed class VideoInfoState {
     object Idle : VideoInfoState()
@@ -62,6 +63,18 @@ class DownloaderViewModel : ViewModel() {
 
     private val _filesListState = MutableStateFlow<FilesListState>(FilesListState.Idle)
     val filesListState: StateFlow<FilesListState> = _filesListState.asStateFlow()
+
+    private val _videoFiles = MutableStateFlow<List<DownloadedFileDetails>>(emptyList())
+    val videoFiles: StateFlow<List<DownloadedFileDetails>> = _videoFiles.asStateFlow()
+
+    private val _audioFiles = MutableStateFlow<List<DownloadedFileDetails>>(emptyList())
+    val audioFiles: StateFlow<List<DownloadedFileDetails>> = _audioFiles.asStateFlow()
+
+    private fun updateFilesListState(list: List<DownloadedFileDetails>) {
+        _videoFiles.value = list.filter { !it.isAudio && it.path.endsWith("_vdf.mp4", ignoreCase = true) }
+        _audioFiles.value = list.filter { it.isAudio }
+        _filesListState.value = FilesListState.Success(list)
+    }
 
     private val _pausedDownloads = MutableStateFlow<List<PausedDownload>>(emptyList())
     val pausedDownloads: StateFlow<List<PausedDownload>> = _pausedDownloads.asStateFlow()
@@ -278,31 +291,45 @@ class DownloaderViewModel : ViewModel() {
                 val customPath = permissionManager.getCustomDownloadFolderPath()
                 val targetDir = File(customPath)
 
-                // Leverage MediaStore for lightning-fast querying of the custom folder
+                // Leverage MediaStore SQLite index for 0ms metadata retrieval of custom folder
                 val fileSet = mutableSetOf<String>()
                 val filesList = mutableListOf<File>()
+                val mediaStoreMetadataMap = mutableMapOf<String, Pair<String, String>>() // path -> (duration, size)
                 
                 try {
-                    val projection = arrayOf(MediaStore.MediaColumns.DATA)
+                    val projection = arrayOf(
+                        MediaStore.MediaColumns._ID,
+                        MediaStore.MediaColumns.DATA,
+                        MediaStore.MediaColumns.SIZE,
+                        MediaStore.MediaColumns.DURATION
+                    )
                     val selection = "${MediaStore.MediaColumns.DATA} LIKE ?"
                     val sortOrder = "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
 
                     // Query MediaStore for ALL _vdf files
-                    val mediaUris = listOf(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, MediaStore.Files.getContentUri("external"))
+                    val mediaUris = listOf(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, MediaStore.Files.getContentUri("external"))
                     for (uri in mediaUris) {
-                        context.contentResolver.query(uri, projection, selection, arrayOf("$customPath/%_vdf.%"), sortOrder)?.use { cursor ->
-                            val dataCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
+                        context.contentResolver.query(uri, projection, selection, arrayOf("%_vdf.%"), sortOrder)?.use { cursor ->
+                            val dataCol = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
+                            val sizeCol = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE)
+                            val durationCol = cursor.getColumnIndex(MediaStore.MediaColumns.DURATION)
+
                             while (cursor.moveToNext()) {
-                                val path = cursor.getString(dataCol)
-                                val file = File(path)
-                                if (file.exists() && fileSet.add(path)) {
-                                    filesList.add(file)
+                                val path = if (dataCol >= 0) cursor.getString(dataCol) else null
+                                if (path != null && path.startsWith(targetDir.absolutePath)) {
+                                    val file = File(path)
+                                    if (file.exists() && fileSet.add(path)) {
+                                        filesList.add(file)
+                                        val durationMs = if (durationCol >= 0) cursor.getLong(durationCol) else 0L
+                                        val sizeBytes = if (sizeCol >= 0) cursor.getLong(sizeCol) else file.length()
+                                        val formattedDur = if (durationMs > 0) formatDuration(durationMs) else "--:--"
+                                        val formattedSz = formatFileSize(sizeBytes)
+                                        mediaStoreMetadataMap[path] = formattedDur to formattedSz
+                                    }
                                 }
                             }
                         }
                     }
-
-
                 } catch (e: Exception) { e.printStackTrace() }
 
                 // Fallback: Ensure we don't miss new files not yet scanned by MediaStore
@@ -353,39 +380,44 @@ class DownloaderViewModel : ViewModel() {
                 val currentSuccessState = _filesListState.value as? FilesListState.Success
                 val existingFilesMap = currentSuccessState?.files?.associateBy { it.path } ?: emptyMap()
 
-                // STEP 1: Fast load - Instantly show files without waiting for heavy extraction
+                // STEP 1: Fast load - Instantly populate metadata from MediaStore SQLite query
                 val initialList = files.map { file ->
                     existingFilesMap[file.absolutePath] ?: run {
                         val (title, signature) = parseFileName(file.name)
                         val thumbFile = File(thumbCacheDir, "${file.name}.jpg")
+                        val ext = file.extension.lowercase()
+                        val isAudio = ext in listOf("mp3", "m4a") || (file.name.contains("_vdf.", ignoreCase = true) && !file.name.endsWith("_vdf.mp4", ignoreCase = true))
+                        val (msDur, msSz) = mediaStoreMetadataMap[file.absolutePath] ?: ("--:--" to formatFileSize(file.length()))
                         DownloadedFileDetails(
                             title = title,
                             path = file.absolutePath,
                             signature = signature,
-                            size = formatFileSize(file.length()),
-                            duration = "--:--", // Placeholder, will be updated lazily
-                            thumbnailUri = if (thumbFile.exists()) Uri.fromFile(thumbFile) else Uri.EMPTY
+                            size = msSz,
+                            duration = msDur,
+                            thumbnailUriStr = if (thumbFile.exists()) Uri.fromFile(thumbFile).toString() else "",
+                            isAudio = isAudio
                         )
                     }
                 }.toMutableList()
 
                 // Immediately update UI with names and sizes
-                _filesListState.value = FilesListState.Success(initialList.toList())
+                updateFilesListState(initialList.toList())
 
                 // STEP 2: Parallel lazy processing with strict CPU throttling (max 2 worker threads)
                 val itemsToProcess = files.indices.filter { i ->
-                    initialList[i].duration == "--:--" || initialList[i].thumbnailUri == Uri.EMPTY
+                    initialList[i].duration == "--:--" || initialList[i].thumbnailUriStr.isEmpty()
                 }
 
                 if (itemsToProcess.isNotEmpty()) {
                     val semaphore = Semaphore(2)
+                    var processedCount = 0
                     coroutineScope {
                         itemsToProcess.map { i ->
                             async(Dispatchers.IO) {
                                 semaphore.withPermit {
                                     val file = files[i]
                                     val thumbFile = File(thumbCacheDir, "${file.name}.jpg")
-                                    var updatedUri = initialList[i].thumbnailUri
+                                    var updatedUriStr = initialList[i].thumbnailUriStr
                                     var updatedDuration = initialList[i].duration
 
                                     val retriever = MediaMetadataRetriever()
@@ -394,8 +426,7 @@ class DownloaderViewModel : ViewModel() {
                                         var attempts = 0
                                         while (!fileReadable && attempts < 2) {
                                             try {
-                                                val ext = file.extension.lowercase()
-                                                val mimeType = if (ext in listOf("mp3", "m4a")) "audio/*" else "video/*"
+                                                val mimeType = if (initialList[i].isAudio) "audio/*" else "video/*"
                                                 val uri = getFileUri(context, file.absolutePath, mimeType)
                                                 
                                                 if (uri != null) {
@@ -420,8 +451,7 @@ class DownloaderViewModel : ViewModel() {
                                             updatedDuration = formatDuration(durationMs)
 
                                             if (!thumbFile.exists()) {
-                                                val ext = file.extension.lowercase()
-                                                val bitmap: Bitmap? = if (ext in listOf("mp3", "m4a", "flac", "aac")) {
+                                                val bitmap: Bitmap? = if (initialList[i].isAudio) {
                                                     val pictureBytes = retriever.embeddedPicture
                                                     if (pictureBytes != null) {
                                                         BitmapFactory.decodeByteArray(pictureBytes, 0, pictureBytes.size)
@@ -438,7 +468,7 @@ class DownloaderViewModel : ViewModel() {
                                                     }
                                                     if (scaledBitmap != bitmap) scaledBitmap.recycle()
                                                     scaledBitmap.recycle()
-                                                    updatedUri = Uri.fromFile(thumbFile)
+                                                    updatedUriStr = Uri.fromFile(thumbFile).toString()
                                                 }
                                             }
                                         }
@@ -448,10 +478,11 @@ class DownloaderViewModel : ViewModel() {
                                         try { retriever.release() } catch (e: Exception) {}
                                     }
 
-                                    if (updatedDuration != initialList[i].duration || updatedUri != initialList[i].thumbnailUri) {
-                                        synchronized(initialList) {
-                                            initialList[i] = initialList[i].copy(duration = updatedDuration, thumbnailUri = updatedUri)
-                                            _filesListState.value = FilesListState.Success(initialList.toList())
+                                    synchronized(initialList) {
+                                        initialList[i] = initialList[i].copy(duration = updatedDuration, thumbnailUriStr = updatedUriStr)
+                                        processedCount++
+                                        if (processedCount % 10 == 0 || processedCount == itemsToProcess.size) {
+                                            updateFilesListState(initialList.toList())
                                         }
                                     }
                                 }

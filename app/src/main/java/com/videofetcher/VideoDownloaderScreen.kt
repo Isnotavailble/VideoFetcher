@@ -837,15 +837,8 @@ fun FilesContent(
         )
     }
 
-    val (videoFiles, audioFiles) = remember(filesListState) {
-        if (filesListState is FilesListState.Success) {
-            val videoRegex = Regex(".*_vdf\\.mp4$", RegexOption.IGNORE_CASE)
-            val audioRegex = Regex(".*_vdf\\.(?!mp4)[^.]+$", RegexOption.IGNORE_CASE)
-            filesListState.files.filter { it.path.matches(videoRegex) } to filesListState.files.filter { it.path.matches(audioRegex) }
-        } else {
-            emptyList<DownloadedFileDetails>() to emptyList<DownloadedFileDetails>()
-        }
-    }
+    val videoFiles by viewModel.videoFiles.collectAsState()
+    val audioFiles by viewModel.audioFiles.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize()) {
         Text("My Files", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
@@ -1581,17 +1574,18 @@ fun DownloadedVideoCard(
     onDelete: (DownloadedFileDetails) -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    val isAudio = file.path.endsWith(".mp3", ignoreCase = true) || file.path.endsWith(".m4a", ignoreCase = true)
+    val isAudio = file.isAudio
+    val onCardClick = remember(file, context) { { viewModel.playVideo(context, file) } }
 
         Row(
             modifier = Modifier
-                .clickable { viewModel.playVideo(context, file) }
+                .clickable(onClick = onCardClick)
                 .fillMaxWidth()
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             VideoThumbnailBox(
-                imageData = if (file.thumbnailUri == Uri.EMPTY) null else file.thumbnailUri,
+                imageData = file.thumbnailUriStr.ifEmpty { null },
                 isAudio = isAudio,
                 size = 80.dp
             )
