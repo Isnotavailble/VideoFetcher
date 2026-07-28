@@ -21,6 +21,7 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -225,55 +226,68 @@ class DownloadService : Service() {
 
                 var downloadFinished = false
                 var lastUpdateTime = 0L
+                var attempt = 0
+                val maxAttempts = 2
 
-                try {
-                    YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
-                        if (!isActive) {
-                            return@execute
-                        }
-
-                        val trimmedLine = line.trim()
-                        val isFinishedDownload = line.contains("[download] 100%") || line.contains("100% of") || progress >= 100f
-                        val isConverting = line.contains("[ffmpeg]") || line.contains("Merging")
-                        if (isFinishedDownload) downloadFinished = true
-
-                        val currentTime = System.currentTimeMillis()
-
-                        if (isConverting || isFinishedDownload || trimmedLine.isNotEmpty() || (currentTime - lastUpdateTime > 200)) {
-                            lastUpdateTime = currentTime
-
-                            val statusText = if (trimmedLine.isNotEmpty()) {
-                                if (progress > 0f && !isConverting) {
-                                    "${String.format("%.1f", progress)}% • $trimmedLine"
-                                } else {
-                                    trimmedLine
-                                }
-                            } else if (isConverting) {
-                                "Converting & Merging... Please wait"
-                            } else {
-                                "${String.format("%.1f", progress)}% • ETA: ${etaInSeconds}s"
+                while (attempt < maxAttempts && isActive && !downloadFinished) {
+                    attempt++
+                    try {
+                        YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
+                            if (!isActive) {
+                                return@execute
                             }
 
-                            DownloadManager.updateDownloadState(url, DownloadState.Downloading(
-                                progress = if (isConverting) 1f else (progress / 100f).coerceIn(0f, 1f),
-                                status = statusText
-                            ))
+                            val trimmedLine = line.trim()
+                            val isFinishedDownload = line.contains("[download] 100%") || line.contains("100% of") || progress >= 100f
+                            val isConverting = line.contains("[ffmpeg]") || line.contains("Merging")
+                            if (isFinishedDownload) downloadFinished = true
 
-                            val titleText = if (isConverting) "Converting & Merging..." else "Downloading Video..."
-                            val notification = createNotification(titleText, statusText, progress.toInt())
-                            notificationManager.notify(notificationId, notification.build())
+                            val currentTime = System.currentTimeMillis()
+
+                            if (isConverting || isFinishedDownload || trimmedLine.isNotEmpty() || (currentTime - lastUpdateTime > 200)) {
+                                lastUpdateTime = currentTime
+
+                                val statusText = if (trimmedLine.isNotEmpty()) {
+                                    if (progress > 0f && !isConverting) {
+                                        "${String.format("%.1f", progress)}% • $trimmedLine"
+                                    } else {
+                                        trimmedLine
+                                    }
+                                } else if (isConverting) {
+                                    "Converting & Merging... Please wait"
+                                } else {
+                                    "${String.format("%.1f", progress)}% • ETA: ${etaInSeconds}s"
+                                }
+
+                                DownloadManager.updateDownloadState(url, DownloadState.Downloading(
+                                    progress = if (isConverting) 1f else (progress / 100f).coerceIn(0f, 1f),
+                                    status = statusText
+                                ))
+
+                                val titleText = if (isConverting) "Converting & Merging..." else "Downloading Video..."
+                                val notification = createNotification(titleText, statusText, progress.toInt())
+                                notificationManager.notify(notificationId, notification.build())
+                            }
                         }
-                    }
-                } catch (postEx: Exception) {
-                    when {
-                        !isActive || postEx.message?.contains("Process destroyed") == true -> {
-                            // Cancelled – do nothing
-                        }
-                        downloadFinished -> {
-                            // Download finished before FFmpeg post-processing cleanup log
-                        }
-                        else -> {
-                            throw postEx
+                        break // Success, exit retry loop
+                    } catch (postEx: Exception) {
+                        when {
+                            !isActive || postEx.message?.contains("Process destroyed") == true -> {
+                                break
+                            }
+                            downloadFinished -> {
+                                break
+                            }
+                            com.videofetcher.cookies.NetscapeCookieWriter.isAuthException(postEx.message) && attempt < maxAttempts -> {
+                                DownloadManager.updateDownloadState(url, DownloadState.Downloading(
+                                    progress = 0f,
+                                    status = "Refreshing session & retrying... (Attempt $attempt/$maxAttempts)"
+                                ))
+                                delay(1000)
+                            }
+                            else -> {
+                                throw postEx
+                            }
                         }
                     }
                 }
@@ -310,7 +324,6 @@ class DownloadService : Service() {
                             val thumbCacheDir = File(cacheDir, "thumbnails")
                             if (!thumbCacheDir.exists()) thumbCacheDir.mkdirs()
                             val thumbFile = File(thumbCacheDir, "${destFile.name}.jpg")
-                            val ext = destFile.extension.lowercase()
                             if (!thumbFile.exists()) {
                                 var bitmap: Bitmap? = null
 

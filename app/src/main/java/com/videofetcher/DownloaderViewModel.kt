@@ -23,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -184,7 +185,29 @@ class DownloaderViewModel : ViewModel() {
                     }
                 }
                 
-                val info = YoutubeDL.getInstance().getInfo(request)
+                var info: com.yausername.youtubedl_android.mapper.VideoInfo? = null
+                var attempt = 0
+                val maxAttempts = 2
+
+                while (attempt < maxAttempts && isActive) {
+                    attempt++
+                    try {
+                        info = YoutubeDL.getInstance().getInfo(request)
+                        break
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        if (com.videofetcher.cookies.NetscapeCookieWriter.isAuthException(e.message) && attempt < maxAttempts) {
+                            delay(1000)
+                        } else if (attempt >= maxAttempts) {
+                            throw e
+                        }
+                    }
+                }
+
+                if (info == null) {
+                    _videoInfoState.value = VideoInfoState.Error("Failed to fetch media metadata.")
+                    return@launch
+                }
                 
                 // Resolution Bucketing (handles vertical videos securely)
                 val rawMaxHeight = info.formats

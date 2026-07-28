@@ -83,15 +83,34 @@ fun CookieManagementScreen(
                     }
                 },
                 actions = {
-                    TextButton(onClick = { folderPickerLauncher.launch(null) }) {
-                        Text(
-                            text = "Restore",
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-                    if (savedDomains.isNotEmpty()) {
+                    if (savedDomains.isEmpty()) {
+                        TextButton(onClick = { folderPickerLauncher.launch(null) }) {
+                            Text(
+                                text = "Restore",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    } else {
+                        TextButton(onClick = {
+                            val (pulled, pushed) = NetscapeCookieWriter.smartSyncCookies(context)
+                            val msg = when {
+                                pulled > 0 && pushed > 0 -> "Synced! Merged $pulled restored & backed up $pushed active cookies"
+                                pulled > 0 -> "Synced! Restored $pulled missing cookies"
+                                pushed > 0 -> "Synced! Backed up $pushed active cookies"
+                                else -> "Cookies synced"
+                            }
+                            android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                            refreshTrigger++
+                        }) {
+                            Text(
+                                text = "Sync",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
                         TextButton(onClick = { showClearAllDialog = true }) {
                             Text(
                                 text = "Clear All",
