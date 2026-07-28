@@ -1492,6 +1492,8 @@ fun AboutScreen(onBack: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(24.dp))
 
+            ExpandableCautionItem()
+
             AboutFeatureItem(
                 icon = { Icon(Icons.Filled.Lock, contentDescription = "Privacy", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp)) },
                 title = "100% Private & Local",
@@ -1562,6 +1564,60 @@ private fun AboutFeatureItem(
             Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
             Spacer(modifier = Modifier.height(4.dp))
             Text(description, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f), fontSize = 12.sp, lineHeight = 16.sp)
+        }
+    }
+}
+
+@Composable
+private fun ExpandableCautionItem() {
+    var expanded by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded }
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Box(modifier = Modifier.padding(top = 2.dp)) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_warning),
+                contentDescription = "Caution",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Caution About Cookies",
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 14.sp
+                )
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = if (expanded) {
+                    "Using account cookies is entirely at your own risk. When cookies are attached, yt-dlp mimics your personal digital identity during requests. Social platforms (especially Meta / Facebook) actively detect automated traffic — testing showed Facebook issuing \"Automation Detected\" warnings within 3 to 4 days, which can lead to account bans. Please use cookies with caution and delete them when no longer needed."
+                } else {
+                    "Tap to read important account risk details regarding Meta & cookies..."
+                },
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                fontSize = 12.sp,
+                lineHeight = 16.sp
+            )
         }
     }
 }

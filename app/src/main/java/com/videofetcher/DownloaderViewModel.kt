@@ -186,9 +186,9 @@ class DownloaderViewModel : ViewModel() {
                 if (context != null) {
                     val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl)
                     val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, cleanUrl)
-                    val hasCookies = platformCookieFile?.exists() == true && platformCookieFile.length() > 0
+                    val hasCookies = platformCookieFile != null
 
-                    if (platformCookieFile != null && hasCookies) {
+                    if (platformCookieFile != null) {
                         request.addOption("--cookies", platformCookieFile.absolutePath)
                         request.addOption("--retries", "3")
                         request.addOption("--fragment-retries", "5")
@@ -228,7 +228,7 @@ class DownloaderViewModel : ViewModel() {
                 
                 var info: com.yausername.youtubedl_android.mapper.VideoInfo? = null
                 var attempt = 0
-                val maxAttempts = 2
+                val maxAttempts = if (context != null && com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, cleanUrl) != null) 2 else 1
 
                 while (attempt < maxAttempts && isActive) {
                     attempt++
@@ -237,7 +237,7 @@ class DownloaderViewModel : ViewModel() {
                         break
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
-                        if (com.videofetcher.cookies.NetscapeCookieWriter.isAuthException(e.message) && attempt < maxAttempts) {
+                        if (maxAttempts > 1 && com.videofetcher.cookies.NetscapeCookieWriter.isAuthException(e.message) && attempt < maxAttempts) {
                             delay(1000)
                         } else if (attempt >= maxAttempts) {
                             throw e

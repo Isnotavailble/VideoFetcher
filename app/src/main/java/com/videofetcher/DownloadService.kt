@@ -113,9 +113,9 @@ class DownloadService : Service() {
                 
                 val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl)
                 val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, cleanUrl)
-                val hasCookies = platformCookieFile?.exists() == true && platformCookieFile.length() > 0
+                val hasCookies = platformCookieFile != null
                 
-                if (platformCookieFile != null && hasCookies) {
+                if (platformCookieFile != null) {
                     request.addOption("--cookies", platformCookieFile.absolutePath)
                     request.addOption("--retries", "3")
                     request.addOption("--fragment-retries", "5")
@@ -155,7 +155,7 @@ class DownloadService : Service() {
                                 if (domainKey.lowercase() != "instagram") {
                                     addOption("--force-ipv4")
                                 }
-                                if (platformCookieFile != null && hasCookies) {
+                                if (platformCookieFile != null) {
                                     addOption("--cookies", platformCookieFile.absolutePath)
                                 }
                             }
@@ -227,7 +227,7 @@ class DownloadService : Service() {
                 var downloadFinished = false
                 var lastUpdateTime = 0L
                 var attempt = 0
-                val maxAttempts = 2
+                val maxAttempts = if (hasCookies) 2 else 1
 
                 while (attempt < maxAttempts && isActive && !downloadFinished) {
                     attempt++
@@ -279,7 +279,7 @@ class DownloadService : Service() {
                             downloadFinished -> {
                                 break
                             }
-                            com.videofetcher.cookies.NetscapeCookieWriter.isAuthException(postEx.message) && attempt < maxAttempts -> {
+                            hasCookies && com.videofetcher.cookies.NetscapeCookieWriter.isAuthException(postEx.message) && attempt < maxAttempts -> {
                                 DownloadManager.updateDownloadState(url, DownloadState.Downloading(
                                     progress = 0f,
                                     status = "Refreshing session & retrying... (Attempt $attempt/$maxAttempts)"

@@ -548,12 +548,25 @@ object NetscapeCookieWriter {
     }
 
     /**
-     * Resolves the input URL's domain key and returns its cookie file if an active cookie file exists in private storage.
+     * Resolves the input URL's domain key and returns its cookie file if an active user-authenticated cookie file exists in private storage.
      */
     fun getCookieFileForUrl(context: Context, inputUrl: String): File? {
         val domainKey = getDomainKey(inputUrl)
         val file = File(context.filesDir, "${domainKey}_cookies.txt")
-        return if (file.exists() && file.length() > HEADER.length) file else null
+        if (!file.exists() || file.length() <= HEADER.length) return null
+
+        val hasUserCookies = try {
+            file.useLines { lines ->
+                lines.any { line ->
+                    val trimmed = line.trim()
+                    trimmed.isNotBlank() && !trimmed.startsWith("#")
+                }
+            }
+        } catch (e: Exception) {
+            false
+        }
+
+        return if (hasUserCookies) file else null
     }
 
     /**

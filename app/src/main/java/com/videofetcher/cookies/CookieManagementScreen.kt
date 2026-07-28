@@ -142,38 +142,51 @@ fun CookieManagementScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(12.dp)
                     ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_warning),
-                            contentDescription = "Warning",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_warning),
+                                    contentDescription = "Note",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Note",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            IconButton(
+                                onClick = { isWarningVisible = false },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Text(
+                                    text = "✕",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Please keep your cookie file private and do not share this file. This file contains login session of your account.",
+                            text = "Please reduce using Instagram and Facebook cookies as they belong to Meta. This app effectively downloads most videos without cookies — only use cookies when necessary. If you want to deactivate cookie usage for a platform, simply delete its cookie session below.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                             fontSize = 12.sp,
                             lineHeight = 16.sp
                         )
-                        IconButton(
-                            onClick = { isWarningVisible = false },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Text(
-                                text = "✕",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                            )
-                        }
                     }
                 }
             }
