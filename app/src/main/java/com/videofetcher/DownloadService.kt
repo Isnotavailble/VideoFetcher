@@ -220,7 +220,7 @@ class DownloadService : Service() {
                 if (!tempDir.exists()) tempDir.mkdirs()
 
                 request.addOption("--trim-filenames", "80")
-                request.addOption("-o", "${tempDir.absolutePath}/%(title,id,uuid)s_${resolutionSignature}_vdf.%(ext)s")
+                request.addOption("-o", "${tempDir.absolutePath}/${processId}_%(title|${processId})s_${resolutionSignature}_vdf.%(ext)s")
                 request.addOption("--concurrent-fragments", "1")
                 request.addOption("--http-chunk-size", "10M")
 
@@ -269,6 +269,7 @@ class DownloadService : Service() {
                                 notificationManager.notify(notificationId, notification.build())
                             }
                         }
+                        downloadFinished = true
                         break // Success, exit retry loop
                     } catch (postEx: Exception) {
                         when {
@@ -293,11 +294,15 @@ class DownloadService : Service() {
                 }
 
                 if (isActive) {
-                    val tempOutputFile = tempDir.listFiles()?.firstOrNull { it.isFile && it.name.contains("_vdf.") && it.length() > 0 }
-                    if (downloadFinished && tempOutputFile != null && tempOutputFile.exists()) {
-                        val originalName = tempOutputFile.name
+                    val tempOutputFile = tempDir.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("${processId}_") && it.length() > 0 && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") }
+                        ?: tempDir.listFiles()?.firstOrNull { it.isFile && it.name.contains("_vdf.") && it.length() > 0 && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") }
+                        ?: tempDir.listFiles()?.firstOrNull { it.isFile && it.length() > 0 && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") }
+                        ?: tempDir.listFiles()?.firstOrNull { it.isFile && it.length() > 0 }
+
+                    if ((downloadFinished || tempOutputFile != null) && tempOutputFile != null && tempOutputFile.exists()) {
+                        val rawName = tempOutputFile.name.replace(Regex("^downloader_[-0-9a-zA-Z]+_"), "").removePrefix("${processId}_")
                         val ext = tempOutputFile.extension
-                        val nameWithoutExt = tempOutputFile.nameWithoutExtension
+                        val nameWithoutExt = if (rawName.endsWith(".$ext", ignoreCase = true)) rawName.dropLast(ext.length + 1) else rawName
 
                         val (baseName, vdfSuffix) = if (nameWithoutExt.endsWith("_vdf", ignoreCase = true)) {
                             nameWithoutExt.substring(0, nameWithoutExt.length - 4) to "_vdf"
@@ -305,10 +310,19 @@ class DownloadService : Service() {
                             nameWithoutExt to ""
                         }
 
-                        var destFile = File(targetDir, originalName)
+                        val sigMatch = """^(.*?)[\s_](\([^)]+\))$""".toRegex().find(baseName)
+                        val titlePart = sigMatch?.groupValues?.get(1) ?: baseName
+                        val sigPart = sigMatch?.groupValues?.get(2) ?: ""
+
+                        val initialFileName = if (sigPart.isNotEmpty()) "${titlePart}_${sigPart}${vdfSuffix}.${ext}" else "${titlePart}${vdfSuffix}.${ext}"
+                        var destFile = File(targetDir, initialFileName)
                         var counter = 1
                         while (destFile.exists()) {
-                            destFile = File(targetDir, "${baseName}_${counter}${vdfSuffix}.${ext}")
+                            destFile = if (sigPart.isNotEmpty()) {
+                                File(targetDir, "${titlePart}_${counter}_${sigPart}${vdfSuffix}.${ext}")
+                            } else {
+                                File(targetDir, "${titlePart}_${counter}${vdfSuffix}.${ext}")
+                            }
                             counter++
                         }
 
@@ -317,7 +331,9 @@ class DownloadService : Service() {
                             tempOutputFile.copyTo(destFile, overwrite = true)
                             tempOutputFile.delete()
                         }
-                        tempDir.deleteRecursively()
+
+                        // Targeted cleanup of this task's processId temp files inside .vdf_temp/
+                        tempDir.listFiles()?.filter { it.name.startsWith("${processId}_") }?.forEach { it.delete() }
 
                         // Pre-extract local video/audio thumbnail directly from saved file for instant Files tab rendering
                         try {

@@ -47,7 +47,23 @@ object DownloadManager {
     private val _fileRefreshCounter = MutableStateFlow(0)
     val fileRefreshCounter: StateFlow<Int> = _fileRefreshCounter.asStateFlow()
 
+    // Tracks when the last internal (in-app) refresh was triggered
+    // Used by triggerExternalRefresh() to suppress ContentObserver events
+    // that are caused by the app's own MediaScannerConnection.scanFile() call
+    private var lastInternalRefreshTime = 0L
+
     fun triggerFileRefresh() {
+        lastInternalRefreshTime = System.currentTimeMillis()
         _fileRefreshCounter.value += 1
+    }
+
+    // Called exclusively by the ContentObserver in DownloaderViewModel.
+    // Suppresses the event if an internal refresh happened within the last 3 seconds
+    // to prevent double-render when the app's own download scan triggers the observer.
+    fun triggerExternalRefresh() {
+        val elapsed = System.currentTimeMillis() - lastInternalRefreshTime
+        if (elapsed > 3000L) {
+            _fileRefreshCounter.value += 1
+        }
     }
 }

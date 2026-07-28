@@ -3,12 +3,15 @@ package com.videofetcher
 import android.content.Context
 import android.content.ContentUris
 import android.content.Intent
+import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaScannerConnection
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
@@ -89,6 +92,44 @@ class DownloaderViewModel : ViewModel() {
     private val baseDirName = "VideoFetcher"
     private var fetchJob: Job? = null
     private var analyzeJob: Job? = null
+
+    // ContentObserver for detecting external file deletions (e.g. via another file manager).
+    // Uses a 300ms debounce Handler to collapse rapid successive MediaStore events into one call.
+    // Calls triggerExternalRefresh() which has a 3s suppression window to avoid double-render
+    // when the app's own MediaScannerConnection.scanFile() triggers the observer.
+    private var appContext: Context? = null
+    private val debounceHandler = Handler(Looper.getMainLooper())
+    private val externalRefreshRunnable = Runnable { DownloadManager.triggerExternalRefresh() }
+    private val mediaStoreObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+            debounceHandler.removeCallbacks(externalRefreshRunnable)
+            debounceHandler.postDelayed(externalRefreshRunnable, 300L)
+        }
+    }
+
+    init {
+        // Observer is registered lazily when fetchDownloadedFiles() is first called with a Context.
+        // See registerMediaObserver(context).
+    }
+
+    private fun registerMediaObserver(context: Context) {
+        if (appContext != null) return // Already registered
+        appContext = context.applicationContext
+        val resolver = appContext!!.contentResolver
+        resolver.registerContentObserver(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, mediaStoreObserver
+        )
+        resolver.registerContentObserver(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, mediaStoreObserver
+        )
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        debounceHandler.removeCallbacks(externalRefreshRunnable)
+        appContext?.contentResolver?.unregisterContentObserver(mediaStoreObserver)
+        appContext = null
+    }
 
     fun checkForEngineUpdate(context: Context, forceCheck: Boolean = false) {
         viewModelScope.launch {
@@ -310,6 +351,7 @@ class DownloaderViewModel : ViewModel() {
             }
             try {
                 if (context == null) return@launch
+                registerMediaObserver(context)
                 val permissionManager = PermissionManager(context)
                 val customPath = permissionManager.getCustomDownloadFolderPath()
                 val targetDir = File(customPath)
@@ -344,7 +386,8 @@ class DownloaderViewModel : ViewModel() {
                                     if (file.exists() && fileSet.add(path)) {
                                         filesList.add(file)
                                         val durationMs = if (durationCol >= 0) cursor.getLong(durationCol) else 0L
-                                        val sizeBytes = if (sizeCol >= 0) cursor.getLong(sizeCol) else file.length()
+                                        val msSize = if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L
+                                        val sizeBytes = if (msSize > 0L) msSize else file.length()
                                         val formattedDur = if (durationMs > 0) formatDuration(durationMs) else "--:--"
                                         val formattedSz = formatFileSize(sizeBytes)
                                         mediaStoreMetadataMap[path] = formattedDur to formattedSz
@@ -411,11 +454,12 @@ class DownloaderViewModel : ViewModel() {
                         val ext = file.extension.lowercase()
                         val isAudio = ext in listOf("mp3", "m4a") || (file.name.contains("_vdf.", ignoreCase = true) && !file.name.endsWith("_vdf.mp4", ignoreCase = true))
                         val (msDur, msSz) = mediaStoreMetadataMap[file.absolutePath] ?: ("--:--" to formatFileSize(file.length()))
+                        val resolvedSize = if (msSz == "0 B" || msSz == "0.0 B") formatFileSize(file.length()) else msSz
                         DownloadedFileDetails(
                             title = title,
                             path = file.absolutePath,
                             signature = signature,
-                            size = msSz,
+                            size = resolvedSize,
                             duration = msDur,
                             thumbnailUriStr = if (thumbFile.exists()) Uri.fromFile(thumbFile).toString() else "",
                             isAudio = isAudio
@@ -524,27 +568,40 @@ class DownloaderViewModel : ViewModel() {
         return fetchJob
     }
     
-    // PARSING LOGIC: Extracts clean title and (Resolution)
+    // PARSING LOGIC: Strictly extracts clean title and (Resolution) subtext anchored right-to-left before _vdf at the end
     private fun parseFileName(fileName: String): Pair<String, String> {
         val lastIndex = fileName.lastIndexOf('.')
         if (lastIndex == -1) return fileName to "(MP4)"
-        
+
+        val ext = fileName.substring(lastIndex + 1)
         val nameWithoutExt = fileName.substring(0, lastIndex)
-        
+
+        // 1. Anchored Regex matching right-to-left right before _vdf at the end: ..._(reso)_vdf
+        val vdfRegex = """^(.*?)[\s_](\([^)]+\))_vdf$""".toRegex(RegexOption.IGNORE_CASE)
+        val vdfMatch = vdfRegex.find(nameWithoutExt)
+
+        if (vdfMatch != null) {
+            val title = vdfMatch.groupValues[1].replace("_", " ").trim()
+            val signature = vdfMatch.groupValues[2]
+            return title to signature
+        }
+
+        // 2. Fallback if _vdf is missing: match right-to-left anchored at the end of nameWithoutExt: ..._(reso)
+        val endRegex = """^(.*?)[\s_](\([^)]+\))$""".toRegex()
+        val endMatch = endRegex.find(nameWithoutExt)
+
+        if (endMatch != null) {
+            val title = endMatch.groupValues[1].replace("_", " ").trim()
+            val signature = endMatch.groupValues[2]
+            return title to signature
+        }
+
         var cleanName = nameWithoutExt
         if (cleanName.endsWith("_vdf", ignoreCase = true)) {
             cleanName = cleanName.substring(0, cleanName.length - 4)
         }
 
-        val signatureRegex = """(.*)[\s_](\([^)]+\))$""".toRegex()
-        val matchResult = signatureRegex.find(cleanName)
-        
-        return if (matchResult != null) {
-            val (title, signature) = matchResult.destructured
-            title.replace("_", " ") to signature
-        } else {
-            cleanName.replace("_", " ") to "(${fileName.substring(lastIndex + 1).uppercase()})"
-        }
+        return cleanName.replace("_", " ").trim() to "(${ext.uppercase()})"
     }
 
     private fun formatFileSize(size: Long): String {
