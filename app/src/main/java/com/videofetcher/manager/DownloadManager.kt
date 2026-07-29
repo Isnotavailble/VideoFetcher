@@ -5,8 +5,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.videofetcher.EngineState
 import com.videofetcher.DownloadState
-
-object DownloadManager {
+class DownloadManager {
     private val _engineState = MutableStateFlow<EngineState>(EngineState.Initializing)
     val engineState: StateFlow<EngineState> = _engineState.asStateFlow()
 

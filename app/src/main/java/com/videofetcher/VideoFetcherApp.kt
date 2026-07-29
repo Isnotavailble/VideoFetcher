@@ -13,16 +13,18 @@ import kotlinx.coroutines.launch
 
 class VideoFetcherApp : Application() {
     private val appScope = CoroutineScope(Dispatchers.IO)
+    lateinit var container: AppContainer
 
     override fun onCreate() {
         super.onCreate()
+        container = AppContainer(this)
 
-        DownloadManager.updateEngineState(EngineState.Initializing)
+        container.downloadManager.updateEngineState(EngineState.Initializing)
 
         // Pre-warm YoutubeDL and FFmpeg concurrently in background threads on app startup
         appScope.launch {
             try {
-                val permissionManager = PermissionManager(applicationContext)
+                val permissionManager = container.permissionManager
                 val tempBaseDir = java.io.File(permissionManager.getCustomDownloadFolderPath(), ".vdf_temp")
                 if (tempBaseDir.exists()) {
                     val now = System.currentTimeMillis()
@@ -41,10 +43,10 @@ class VideoFetcherApp : Application() {
                 val ytJob = async { YoutubeDL.getInstance().init(applicationContext) }
                 val ffmpegJob = async { FFmpeg.getInstance().init(applicationContext) }
                 awaitAll(ytJob, ffmpegJob)
-                DownloadManager.updateEngineState(EngineState.Idle)
+                container.downloadManager.updateEngineState(EngineState.Idle)
             } catch (e: Exception) {
                 e.printStackTrace()
-                DownloadManager.updateEngineState(EngineState.Error("Engine boot failed: ${e.message}"))
+                container.downloadManager.updateEngineState(EngineState.Error("Engine boot failed: ${e.message}"))
             }
         }
     }

@@ -66,9 +66,9 @@ sealed class EngineUpdateState {
     data class Error(val message: String) : EngineUpdateState()
 }
 
-class DownloaderViewModel : ViewModel() {
-    val engineState: StateFlow<EngineState> = DownloadManager.engineState
-    val activeDownloads: StateFlow<Map<String, DownloadState>> = DownloadManager.activeDownloads
+class DownloaderViewModel(private val container: AppContainer) : ViewModel() {
+    val engineState: StateFlow<EngineState> = container.downloadManager.engineState
+    val activeDownloads: StateFlow<Map<String, DownloadState>> = container.downloadManager.activeDownloads
 
     private val _filesListState = MutableStateFlow<FilesListState>(FilesListState.Idle)
     val filesListState: StateFlow<FilesListState> = _filesListState.asStateFlow()
@@ -104,7 +104,7 @@ class DownloaderViewModel : ViewModel() {
     // when the app's own MediaScannerConnection.scanFile() triggers the observer.
     private var appContext: Context? = null
     private val debounceHandler = Handler(Looper.getMainLooper())
-    private val externalRefreshRunnable = Runnable { DownloadManager.triggerExternalRefresh() }
+    private val externalRefreshRunnable = Runnable { container.downloadManager.triggerExternalRefresh() }
     private val mediaStoreObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) {
             debounceHandler.removeCallbacks(externalRefreshRunnable)
@@ -189,8 +189,8 @@ class DownloaderViewModel : ViewModel() {
                 val request = YoutubeDLRequest(cleanUrl)
 
                 if (context != null) {
-                    val domainKey = com.videofetcher.manager.CookieManager.getDomainKey(cleanUrl)
-                    val platformCookieFile = com.videofetcher.manager.CookieManager.getCookieFileForUrl(context, cleanUrl)
+                    val domainKey = container.cookieManager.getDomainKey(cleanUrl)
+                    val platformCookieFile = container.cookieManager.getCookieFileForUrl(context, cleanUrl)
                     val hasCookies = platformCookieFile != null
 
                     if (platformCookieFile != null) {
@@ -199,7 +199,7 @@ class DownloaderViewModel : ViewModel() {
                         request.addOption("--fragment-retries", "1")
                     }
 
-                    val effectiveUserAgent = com.videofetcher.manager.UserAgentManager.getEffectiveUserAgentForDomain(
+                    val effectiveUserAgent = container.userAgentManager.getEffectiveUserAgentForDomain(
                         context,
                         domainKey,
                         isAuthenticated = hasCookies
@@ -207,7 +207,7 @@ class DownloaderViewModel : ViewModel() {
                     request.addOption("--user-agent", effectiveUserAgent)
                 }
                 
-                val domainKey = if (context != null) com.videofetcher.manager.CookieManager.getDomainKey(cleanUrl) else ""
+                val domainKey = if (context != null) container.cookieManager.getDomainKey(cleanUrl) else ""
                 
                 // 1. Global Speed Optimizations & Aggressive Pruning
                 request.addOption("--no-playlist")
@@ -222,7 +222,7 @@ class DownloaderViewModel : ViewModel() {
 
                 // 3. User Preference Speed Toggles
                 if (context != null) {
-                    val permissionManager = PermissionManager(context)
+                    val permissionManager = container.permissionManager
                     if (permissionManager.isBypassSslEnabled()) {
                         request.addOption("--no-check-certificates")
                     }
@@ -233,7 +233,7 @@ class DownloaderViewModel : ViewModel() {
                 
                 var info: com.yausername.youtubedl_android.mapper.VideoInfo? = null
                 var attempt = 0
-                val maxAttempts = if (context != null && com.videofetcher.manager.CookieManager.getCookieFileForUrl(context, cleanUrl) != null) 2 else 1
+                val maxAttempts = if (context != null && container.cookieManager.getCookieFileForUrl(context, cleanUrl) != null) 2 else 1
 
                 while (attempt < maxAttempts && isActive) {
                     attempt++
@@ -242,7 +242,7 @@ class DownloaderViewModel : ViewModel() {
                         break
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
-                        if (maxAttempts > 1 && com.videofetcher.manager.CookieManager.isAuthException(e.message) && attempt < maxAttempts) {
+                        if (maxAttempts > 1 && container.cookieManager.isAuthException(e.message) && attempt < maxAttempts) {
                             delay(1000)
                         } else if (attempt >= maxAttempts) {
                             throw e
@@ -304,7 +304,7 @@ class DownloaderViewModel : ViewModel() {
         val titleText = if (currentInfo is VideoInfoState.Success) currentInfo.title else "Video"
 
         if (thumbUrl.isNotBlank()) {
-            DownloadManager.updateDownloadThumbnail(url, thumbUrl)
+            container.downloadManager.updateDownloadThumbnail(url, thumbUrl)
         }
 
         val serviceIntent = Intent(context, DownloadService::class.java).apply {
@@ -357,7 +357,7 @@ class DownloaderViewModel : ViewModel() {
             try {
                 if (context == null) return@launch
                 registerMediaObserver(context)
-                val permissionManager = PermissionManager(context)
+                val permissionManager = container.permissionManager
                 val customPath = permissionManager.getCustomDownloadFolderPath()
                 val targetDir = File(customPath)
 
@@ -647,7 +647,7 @@ class DownloaderViewModel : ViewModel() {
 
         // 2. Try SAF
         try {
-            val permissionManager = PermissionManager(context)
+            val permissionManager = container.permissionManager
             val possibleUris = listOfNotNull(permissionManager.getSavedFolderUri(), permissionManager.getCustomDownloadFolderUri())
             for (treeUri in possibleUris) {
                 val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
@@ -739,7 +739,7 @@ class DownloaderViewModel : ViewModel() {
     }
 
     fun resetState(url: String) {
-        DownloadManager.removeDownload(url)
+        container.downloadManager.removeDownload(url)
     }
 
     fun deleteVideo(
@@ -758,7 +758,7 @@ class DownloaderViewModel : ViewModel() {
 
                 // 2. Fallback to SAF if normal delete failed (due to Scoped Storage + reinstall)
                 if (!isDeleted && file.exists()) {
-                    val permissionManager = PermissionManager(context)
+                    val permissionManager = container.permissionManager
 
                     // Use either the dedicated delete permission URI or the general custom folder URI
                     val possibleUris = listOfNotNull(

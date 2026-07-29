@@ -1,7 +1,6 @@
 package com.videofetcher.manager
-import com.videofetcher.manager.PermissionManager
-
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
@@ -13,9 +12,9 @@ import java.io.File
  * This is used for the Storage Access Framework (SAF) to allow file operations
  * even after the app has been reinstalled.
  */
-class PermissionManager(private val context: Context) {
+class PermissionManager(private val context: Context, private val userAgentManager: com.videofetcher.manager.UserAgentManager) {
 
-    private val prefs = context.getSharedPreferences("permission_prefs", Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences = context.getSharedPreferences("permission_prefs", Context.MODE_PRIVATE)
     private val key = "video_fetcher_folder_uri"
     
     private val customUriKey = "custom_folder_uri"
@@ -23,27 +22,27 @@ class PermissionManager(private val context: Context) {
     private val userAgentKey = "saved_user_agent"
 
     companion object {
-        val DEFAULT_USER_AGENT: String get() = com.videofetcher.manager.UserAgentManager.DESKTOP_USER_AGENT
+        val DEFAULT_USER_AGENT: String = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
 
     fun getEffectiveUserAgent(): String {
-        return com.videofetcher.manager.UserAgentManager.getEffectiveUserAgentForDomain(context, "")
+        return userAgentManager.getEffectiveUserAgentForDomain(context, "")
     }
 
     fun getUserAgentForDomain(domainKey: String): String {
-        return com.videofetcher.manager.UserAgentManager.getEffectiveUserAgentForDomain(context, domainKey)
+        return userAgentManager.getEffectiveUserAgentForDomain(context, domainKey)
     }
 
     fun saveUserAgentForDomain(domainKey: String, userAgent: String) {
-        com.videofetcher.manager.UserAgentManager.saveUserAgentForDomain(context, domainKey, userAgent)
+        userAgentManager.saveUserAgentForDomain(context, domainKey, userAgent)
     }
 
     fun getUserAgent(): String {
-        return com.videofetcher.manager.UserAgentManager.getEffectiveUserAgentForDomain(context, "")
+        return userAgentManager.getEffectiveUserAgentForDomain(context, "")
     }
 
     fun saveUserAgent(userAgent: String) {
-        com.videofetcher.manager.UserAgentManager.saveUserAgentForDomain(context, "general", userAgent)
+        userAgentManager.saveUserAgentForDomain(context, "general", userAgent)
     }
 
     fun isResolutionSelectionEnabled(): Boolean {

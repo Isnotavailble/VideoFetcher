@@ -79,7 +79,7 @@ enum class DownloadType {
 
 @Composable
 fun VideoDownloaderUI(
-    viewModel: DownloaderViewModel = viewModel(),
+    viewModel: DownloaderViewModel = viewModel(factory = AppViewModelFactory((androidx.compose.ui.platform.LocalContext.current.applicationContext as VideoFetcherApp).container)),
     sharedUrl: String = "",
     isDarkTheme: Boolean,
     onThemeToggle: () -> Unit
@@ -98,13 +98,13 @@ fun VideoDownloaderUI(
 
     var currentTab by remember { mutableStateOf(AppTab.HOME) }
     
-    val permissionManager = remember { PermissionManager(context) }
+    val permissionManager = remember { (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager }
     var isResolutionSelectionEnabled by remember { mutableStateOf(permissionManager.isResolutionSelectionEnabled()) }
 
     // Only refresh when the number of items or successes changes, avoiding progress-tick loops
     val successCount = activeDownloads.values.count { it is DownloadState.Success }
     val activeCount = activeDownloads.size
-    val refreshCounter by DownloadManager.fileRefreshCounter.collectAsState()
+    val refreshCounter by (context.applicationContext as com.videofetcher.VideoFetcherApp).container.downloadManager.fileRefreshCounter.collectAsState()
     
     LaunchedEffect(successCount, activeCount, refreshCounter) {
         viewModel.fetchPausedDownloads(context.applicationContext)
@@ -747,7 +747,7 @@ fun FilesContent(
                 val treeDocumentId = DocumentsContract.getTreeDocumentId(uri)
                 // Verify they selected our specific folder
                 if (treeDocumentId.endsWith("VideoFetcher", ignoreCase = true)) {
-                    PermissionManager(context).saveFolderPermission(uri)
+                    (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager.saveFolderPermission(uri)
                     
                     // Permission saved! Automatically retry the deletion silently
                     fileAwaitingPermission?.let { fileToDelete ->
@@ -993,7 +993,7 @@ fun SettingsContent(
     cookieRefreshTrigger: Int
 ) {
     val scrollState = rememberScrollState()
-    val permissionManager = remember { PermissionManager(context) }
+    val permissionManager = remember { (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager }
     var currentPath by remember { mutableStateOf(permissionManager.getCustomDownloadFolderPath()) }
     
     val folderPickerLauncher = rememberLauncherForActivityResult(
@@ -1152,7 +1152,7 @@ fun SettingsContent(
         Spacer(modifier = Modifier.height(8.dp))
 
         val savedDomains = remember(cookieRefreshTrigger) {
-            CookieManager.getAllSavedCookieDomains(context)
+            (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.getAllSavedCookieDomains(context)
         }
 
         // Row 1: In-App Browser
@@ -1328,7 +1328,7 @@ fun VideoThumbnailBox(
 
 @Composable
 fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: DownloaderViewModel, context: android.content.Context) {
-    val downloadThumbnails by com.videofetcher.manager.DownloadManager.downloadThumbnails.collectAsState()
+    val downloadThumbnails by (androidx.compose.ui.platform.LocalContext.current.applicationContext as VideoFetcherApp).container.downloadManager.downloadThumbnails.collectAsState()
     val thumbnailUrl = downloadThumbnails[url]
 
     val isFinished = downloadState is DownloadState.Success || downloadState is DownloadState.Error || downloadState is DownloadState.Cancelled

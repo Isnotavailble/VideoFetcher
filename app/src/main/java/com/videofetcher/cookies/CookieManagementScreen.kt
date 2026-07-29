@@ -39,20 +39,20 @@ fun CookieManagementScreen(
     val context = LocalContext.current
     var refreshTrigger by remember { mutableStateOf(0) }
     val savedDomains = remember(refreshTrigger) {
-        com.videofetcher.manager.CookieManager.getAllSavedCookieDomains(context)
+        (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.getAllSavedCookieDomains(context)
     }
 
     var domainToDelete by remember { mutableStateOf<CookieDomainInfo?>(null) }
     var showClearAllDialog by remember { mutableStateOf(false) }
     var isWarningVisible by remember { mutableStateOf(true) }
 
-    val permissionManager = remember { PermissionManager(context) }
+    val permissionManager = remember { (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager }
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) {
             permissionManager.saveCustomDownloadFolder(uri)
-            com.videofetcher.manager.CookieManager.restoreFromSafTreeUri(context, uri)
+            (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.restoreFromSafTreeUri(context, uri)
             refreshTrigger++
         }
     }
@@ -96,7 +96,7 @@ fun CookieManagementScreen(
                         }
                     } else {
                         TextButton(onClick = {
-                            val (pulled, pushed) = com.videofetcher.manager.CookieManager.smartSyncCookies(context)
+                            val (pulled, pushed) = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.smartSyncCookies(context)
                             val msg = when {
                                 pulled > 0 && pushed > 0 -> "Synced! Merged $pulled restored & backed up $pushed active cookies"
                                 pulled > 0 -> "Synced! Restored $pulled missing cookies"
@@ -257,7 +257,7 @@ fun CookieManagementScreen(
                 TextButton(
                     onClick = {
                         val key = domainToDelete!!.domainKey
-                        com.videofetcher.manager.CookieManager.deleteCookieFile(context, key)
+                        (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.deleteCookieFile(context, key)
                         Toast.makeText(context, "Deleted cookies for $key", Toast.LENGTH_SHORT).show()
                         domainToDelete = null
                         refreshTrigger++
@@ -285,7 +285,7 @@ fun CookieManagementScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        com.videofetcher.manager.CookieManager.clearAllCookies(context)
+                        (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.clearAllCookies(context)
                         Toast.makeText(context, "All saved cookies cleared", Toast.LENGTH_SHORT).show()
                         showClearAllDialog = false
                         refreshTrigger++

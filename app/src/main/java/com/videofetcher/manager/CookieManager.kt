@@ -17,9 +17,9 @@ data class CookieDomainInfo(
     val cookieCount: Int
 )
 
-object CookieManager {
+class CookieManager {
 
-    private const val HEADER = "# Netscape HTTP Cookie File\n# http://curl.haxx.se/rfc/cookie_spec.html\n# This is a generated file! Do not edit.\n\n"
+    private val HEADER = "# Netscape HTTP Cookie File\n# http://curl.haxx.se/rfc/cookie_spec.html\n# This is a generated file! Do not edit.\n\n"
 
     /**
      * Dynamically extracts a clean primary domain key for ANY website URL or domain string.
@@ -63,7 +63,7 @@ object CookieManager {
      * Resolves the persistent backup directory (.cookies inside VideoFetcher download folder).
      */
     fun getPersistentBackupDir(context: Context): File {
-        val permissionManager = PermissionManager(context)
+        val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
         val customPath = permissionManager.getCustomDownloadFolderPath()
         val backupDir = File(customPath, ".cookies")
         try {
@@ -78,7 +78,7 @@ object CookieManager {
      * Resolves the persistent User-Agent backup directory (.useragent inside VideoFetcher download folder).
      */
     fun getPersistentUserAgentDir(context: Context): File {
-        val permissionManager = PermissionManager(context)
+        val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
         val customPath = permissionManager.getCustomDownloadFolderPath()
         val backupDir = File(customPath, ".useragent")
         try {
@@ -145,7 +145,7 @@ object CookieManager {
      */
     fun restoreFromSafTreeUri(context: Context, treeUri: Uri): Boolean {
         var restoredAny = false
-        val permissionManager = PermissionManager(context)
+        val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
         val contentResolver = context.contentResolver
         val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
 
@@ -226,7 +226,7 @@ object CookieManager {
      * Restores surviving cookie files and User-Agent files into context.filesDir / SharedPreferences after app reinstall.
      */
     fun restoreAllBackupsToPrivateStorage(context: Context) {
-        val permissionManager = PermissionManager(context)
+        val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
 
         // 1. Direct File access for .cookies
         try {
@@ -271,7 +271,7 @@ object CookieManager {
 
         // 3. Delegate User-Agent restoration to UserAgentManager
         try {
-            UserAgentManager.restoreAllUserAgentsToPrivateStorage(context)
+            (context.applicationContext as com.videofetcher.VideoFetcherApp).container.userAgentManager.restoreAllUserAgentsToPrivateStorage(context)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -304,7 +304,7 @@ object CookieManager {
     fun smartSyncCookies(context: Context): Pair<Int, Int> {
         var pulled = 0
         var pushed = 0
-        val permissionManager = PermissionManager(context)
+        val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
 
         // --- Phase 1: PULL / RESTORE Missing Cookies from Backup ---
         try {
@@ -401,7 +401,7 @@ object CookieManager {
             }
 
             // 2. SAF Tree Uri Fallback for Scoped Storage
-            val permissionManager = PermissionManager(context)
+            val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
             val treeUri = permissionManager.getCustomDownloadFolderUri() ?: permissionManager.getSavedFolderUri()
             if (treeUri != null) {
                 try {

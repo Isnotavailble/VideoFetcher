@@ -96,9 +96,9 @@ class QuickDownloadActivity : ComponentActivity() {
                 val context = LocalContext.current
                 val surfaceColor = MaterialTheme.colorScheme.surface
 
-                val permissionManager = remember { PermissionManager(context) }
+                val permissionManager = remember { (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager }
                 val isResolutionSelectionEnabled = remember { permissionManager.isResolutionSelectionEnabled() }
-                val viewModel: DownloaderViewModel = viewModel()
+                val viewModel: DownloaderViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = com.videofetcher.AppViewModelFactory((context.applicationContext as com.videofetcher.VideoFetcherApp).container))
                 val videoInfoState by viewModel.videoInfoState.collectAsState()
                 val engineUpdateState by viewModel.engineUpdateState.collectAsState()
 

@@ -9,7 +9,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-class EngineUpdateManager(context: Context) {
+class EngineUpdateManager(private val context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("engine_update_prefs", Context.MODE_PRIVATE)
 
     companion object {
@@ -51,7 +51,7 @@ class EngineUpdateManager(context: Context) {
                 val connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "HEAD"
                     instanceFollowRedirects = false // Catch the 302 redirect
-                    setRequestProperty("User-Agent", com.videofetcher.manager.UserAgentManager.DESKTOP_USER_AGENT)
+                    setRequestProperty("User-Agent", (context.applicationContext as com.videofetcher.VideoFetcherApp).container.userAgentManager.DESKTOP_USER_AGENT)
                     connectTimeout = 8000
                     readTimeout = 8000
                 }
@@ -118,7 +118,7 @@ class EngineUpdateManager(context: Context) {
                 val binaryUrl = URL(urlString)
                 val connection = (binaryUrl.openConnection() as HttpURLConnection).apply {
                     instanceFollowRedirects = true
-                    setRequestProperty("User-Agent", com.videofetcher.manager.UserAgentManager.DESKTOP_USER_AGENT)
+                    setRequestProperty("User-Agent", (context.applicationContext as com.videofetcher.VideoFetcherApp).container.userAgentManager.DESKTOP_USER_AGENT)
                     connectTimeout = 15000
                     readTimeout = 15000
                 }

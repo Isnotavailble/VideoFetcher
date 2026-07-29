@@ -4,8 +4,7 @@ import android.content.Context
 import android.net.Uri
 import com.videofetcher.manager.PermissionManager
 
-class SettingsRepository(context: Context) {
-    private val permissionManager = PermissionManager(context)
+class SettingsRepository(private val permissionManager: PermissionManager) {
 
     fun isResolutionSelectionEnabled(): Boolean = permissionManager.isResolutionSelectionEnabled()
     fun setResolutionSelectionEnabled(enabled: Boolean) = permissionManager.setResolutionSelectionEnabled(enabled)

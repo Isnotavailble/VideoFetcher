@@ -5,12 +5,12 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 import java.io.File
 
-object UserAgentManager {
-    const val DESKTOP_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-    const val MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+class UserAgentManager {
+    val DESKTOP_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    val MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
 
-    private const val PREFS_NAME = "user_agent_prefs"
-    private const val KEY_SAVED_USER_AGENT = "saved_user_agent"
+    private val PREFS_NAME = "user_agent_prefs"
+    private val KEY_SAVED_USER_AGENT = "saved_user_agent"
 
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -76,7 +76,7 @@ object UserAgentManager {
         val cleanKey = domainKey.lowercase()
         val targetUA = userAgent.ifBlank { MOBILE_USER_AGENT }
         try {
-            val permissionManager = PermissionManager(context)
+            val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
             val customPath = permissionManager.getCustomDownloadFolderPath()
             val backupFolder = File(customPath, ".useragent")
             if (!backupFolder.exists()) backupFolder.mkdirs()
@@ -93,7 +93,7 @@ object UserAgentManager {
      */
     fun restoreAllUserAgentsToPrivateStorage(context: Context) {
         try {
-            val permissionManager = PermissionManager(context)
+            val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
             val customPath = permissionManager.getCustomDownloadFolderPath()
             val backupFolder = File(customPath, ".useragent")
             if (backupFolder.exists() && backupFolder.isDirectory) {
