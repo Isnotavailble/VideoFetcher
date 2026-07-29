@@ -1,4 +1,6 @@
 package com.videofetcher
+import com.videofetcher.manager.DownloadManager
+import com.videofetcher.manager.PermissionManager
 
 import android.content.Context
 import android.content.ContentUris
@@ -37,6 +39,9 @@ import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import com.videofetcher.manager.PauseManager
+import com.videofetcher.manager.PausedDownload
+
 private val FILE_SIGNATURE_REGEX = Regex(".*_vdf\\.(mp4|mp3|m4a|aac|flac|opus|wav|ogg|mkv|webm|3gp)$", RegexOption.IGNORE_CASE)
 
 sealed class VideoInfoState {
@@ -184,8 +189,8 @@ class DownloaderViewModel : ViewModel() {
                 val request = YoutubeDLRequest(cleanUrl)
 
                 if (context != null) {
-                    val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl)
-                    val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, cleanUrl)
+                    val domainKey = com.videofetcher.manager.CookieManager.getDomainKey(cleanUrl)
+                    val platformCookieFile = com.videofetcher.manager.CookieManager.getCookieFileForUrl(context, cleanUrl)
                     val hasCookies = platformCookieFile != null
 
                     if (platformCookieFile != null) {
@@ -194,7 +199,7 @@ class DownloaderViewModel : ViewModel() {
                         request.addOption("--fragment-retries", "1")
                     }
 
-                    val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(
+                    val effectiveUserAgent = com.videofetcher.manager.UserAgentManager.getEffectiveUserAgentForDomain(
                         context,
                         domainKey,
                         isAuthenticated = hasCookies
@@ -202,7 +207,7 @@ class DownloaderViewModel : ViewModel() {
                     request.addOption("--user-agent", effectiveUserAgent)
                 }
                 
-                val domainKey = if (context != null) com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl) else ""
+                val domainKey = if (context != null) com.videofetcher.manager.CookieManager.getDomainKey(cleanUrl) else ""
                 
                 // 1. Global Speed Optimizations & Aggressive Pruning
                 request.addOption("--no-playlist")
@@ -228,7 +233,7 @@ class DownloaderViewModel : ViewModel() {
                 
                 var info: com.yausername.youtubedl_android.mapper.VideoInfo? = null
                 var attempt = 0
-                val maxAttempts = if (context != null && com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(context, cleanUrl) != null) 2 else 1
+                val maxAttempts = if (context != null && com.videofetcher.manager.CookieManager.getCookieFileForUrl(context, cleanUrl) != null) 2 else 1
 
                 while (attempt < maxAttempts && isActive) {
                     attempt++
@@ -237,7 +242,7 @@ class DownloaderViewModel : ViewModel() {
                         break
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
-                        if (maxAttempts > 1 && com.videofetcher.cookies.NetscapeCookieWriter.isAuthException(e.message) && attempt < maxAttempts) {
+                        if (maxAttempts > 1 && com.videofetcher.manager.CookieManager.isAuthException(e.message) && attempt < maxAttempts) {
                             delay(1000)
                         } else if (attempt >= maxAttempts) {
                             throw e
@@ -329,17 +334,17 @@ class DownloaderViewModel : ViewModel() {
     }
 
     fun fetchPausedDownloads(context: Context) {
-        _pausedDownloads.value = PauseRepository(context).getAllPausedDownloads()
+        _pausedDownloads.value = PauseManager(context).getAllPausedDownloads()
     }
 
     fun resumeDownload(context: Context, url: String, quality: String) {
-        PauseRepository(context).removePausedDownload(url)
+        PauseManager(context).removePausedDownload(url)
         fetchPausedDownloads(context)
         startDownload(url, quality, context)
     }
 
     fun cancelPausedDownload(context: Context, url: String) {
-        PauseRepository(context).removePausedDownload(url)
+        PauseManager(context).removePausedDownload(url)
         fetchPausedDownloads(context)
     }
 

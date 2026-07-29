@@ -51,7 +51,7 @@ class EngineUpdateManager(context: Context) {
                 val connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "HEAD"
                     instanceFollowRedirects = false // Catch the 302 redirect
-                    setRequestProperty("User-Agent", com.videofetcher.cookies.UserAgentManager.DESKTOP_USER_AGENT)
+                    setRequestProperty("User-Agent", com.videofetcher.manager.UserAgentManager.DESKTOP_USER_AGENT)
                     connectTimeout = 8000
                     readTimeout = 8000
                 }
@@ -118,7 +118,7 @@ class EngineUpdateManager(context: Context) {
                 val binaryUrl = URL(urlString)
                 val connection = (binaryUrl.openConnection() as HttpURLConnection).apply {
                     instanceFollowRedirects = true
-                    setRequestProperty("User-Agent", com.videofetcher.cookies.UserAgentManager.DESKTOP_USER_AGENT)
+                    setRequestProperty("User-Agent", com.videofetcher.manager.UserAgentManager.DESKTOP_USER_AGENT)
                     connectTimeout = 15000
                     readTimeout = 15000
                 }

@@ -1,4 +1,5 @@
 package com.videofetcher
+import com.videofetcher.manager.PermissionManager
 
 import android.Manifest
 import android.content.Intent

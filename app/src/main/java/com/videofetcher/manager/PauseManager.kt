@@ -1,4 +1,4 @@
-package com.videofetcher
+package com.videofetcher.manager
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -13,8 +13,8 @@ data class PausedDownload(
     val thumbnailUrl: String = ""
 )
 
-// 2. The Repository to manage SharedPreferences safely
-class PauseRepository(context: Context) {
+// 2. The Manager to manage SharedPreferences safely
+class PauseManager(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("paused_downloads_prefs", Context.MODE_PRIVATE)
 
     // Save or Update a paused download

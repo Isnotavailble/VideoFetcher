@@ -1,4 +1,5 @@
-package com.videofetcher
+package com.videofetcher.manager
+import com.videofetcher.manager.PermissionManager
 
 import android.content.Context
 import android.content.Intent
@@ -22,27 +23,27 @@ class PermissionManager(private val context: Context) {
     private val userAgentKey = "saved_user_agent"
 
     companion object {
-        val DEFAULT_USER_AGENT: String get() = com.videofetcher.cookies.UserAgentManager.DESKTOP_USER_AGENT
+        val DEFAULT_USER_AGENT: String get() = com.videofetcher.manager.UserAgentManager.DESKTOP_USER_AGENT
     }
 
     fun getEffectiveUserAgent(): String {
-        return com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, "")
+        return com.videofetcher.manager.UserAgentManager.getEffectiveUserAgentForDomain(context, "")
     }
 
     fun getUserAgentForDomain(domainKey: String): String {
-        return com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, domainKey)
+        return com.videofetcher.manager.UserAgentManager.getEffectiveUserAgentForDomain(context, domainKey)
     }
 
     fun saveUserAgentForDomain(domainKey: String, userAgent: String) {
-        com.videofetcher.cookies.UserAgentManager.saveUserAgentForDomain(context, domainKey, userAgent)
+        com.videofetcher.manager.UserAgentManager.saveUserAgentForDomain(context, domainKey, userAgent)
     }
 
     fun getUserAgent(): String {
-        return com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, "")
+        return com.videofetcher.manager.UserAgentManager.getEffectiveUserAgentForDomain(context, "")
     }
 
     fun saveUserAgent(userAgent: String) {
-        com.videofetcher.cookies.UserAgentManager.saveUserAgentForDomain(context, "general", userAgent)
+        com.videofetcher.manager.UserAgentManager.saveUserAgentForDomain(context, "general", userAgent)
     }
 
     fun isResolutionSelectionEnabled(): Boolean {

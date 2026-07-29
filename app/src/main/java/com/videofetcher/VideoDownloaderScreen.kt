@@ -3,12 +3,18 @@ package com.videofetcher
 import android.Manifest
 import android.os.Build
 import android.net.Uri
+import android.util.Log
+import android.view.KeyEvent
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import com.videofetcher.manager.PausedDownload
+import com.videofetcher.manager.DownloadManager
+import com.videofetcher.manager.PermissionManager
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
-import com.videofetcher.cookies.NetscapeCookieWriter
+import com.videofetcher.manager.CookieManager
 import com.videofetcher.cookies.BrowserScreen
 import com.videofetcher.cookies.CookieManagementScreen
 import androidx.compose.animation.AnimatedVisibility
@@ -1146,7 +1152,7 @@ fun SettingsContent(
         Spacer(modifier = Modifier.height(8.dp))
 
         val savedDomains = remember(cookieRefreshTrigger) {
-            NetscapeCookieWriter.getAllSavedCookieDomains(context)
+            CookieManager.getAllSavedCookieDomains(context)
         }
 
         // Row 1: In-App Browser
@@ -1322,7 +1328,7 @@ fun VideoThumbnailBox(
 
 @Composable
 fun ActiveDownloadCard(downloadState: DownloadState, url: String, viewModel: DownloaderViewModel, context: android.content.Context) {
-    val downloadThumbnails by com.videofetcher.DownloadManager.downloadThumbnails.collectAsState()
+    val downloadThumbnails by com.videofetcher.manager.DownloadManager.downloadThumbnails.collectAsState()
     val thumbnailUrl = downloadThumbnails[url]
 
     val isFinished = downloadState is DownloadState.Success || downloadState is DownloadState.Error || downloadState is DownloadState.Cancelled

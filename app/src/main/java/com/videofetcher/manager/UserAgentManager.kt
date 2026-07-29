@@ -1,9 +1,8 @@
-package com.videofetcher.cookies
+package com.videofetcher.manager
 
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
-import com.videofetcher.PermissionManager
 import java.io.File
 
 object UserAgentManager {

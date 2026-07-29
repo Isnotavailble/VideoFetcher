@@ -1,11 +1,11 @@
-package com.videofetcher.cookies
+package com.videofetcher.manager
 
+import com.videofetcher.manager.PermissionManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
-import android.webkit.CookieManager
-import com.videofetcher.PermissionManager
+import android.webkit.CookieManager as WebkitCookieManager
 import java.io.File
 import java.net.URI
 
@@ -17,7 +17,7 @@ data class CookieDomainInfo(
     val cookieCount: Int
 )
 
-object NetscapeCookieWriter {
+object CookieManager {
 
     private const val HEADER = "# Netscape HTTP Cookie File\n# http://curl.haxx.se/rfc/cookie_spec.html\n# This is a generated file! Do not edit.\n\n"
 
@@ -112,7 +112,7 @@ object NetscapeCookieWriter {
         if (!file.exists() || file.length() <= HEADER.length) return
 
         try {
-            val cookieManager = CookieManager.getInstance()
+            val cookieManager = WebkitCookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
 
             file.readLines().forEach { line ->

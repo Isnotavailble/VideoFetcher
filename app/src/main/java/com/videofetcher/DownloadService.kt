@@ -1,4 +1,6 @@
 package com.videofetcher
+import com.videofetcher.manager.DownloadManager
+import com.videofetcher.manager.PermissionManager
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -25,6 +27,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.videofetcher.manager.PauseManager
+import com.videofetcher.manager.PausedDownload
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -111,8 +115,8 @@ class DownloadService : Service() {
                 }
                 val request = YoutubeDLRequest(cleanUrl)
                 
-                val domainKey = com.videofetcher.cookies.NetscapeCookieWriter.getDomainKey(cleanUrl)
-                val platformCookieFile = com.videofetcher.cookies.NetscapeCookieWriter.getCookieFileForUrl(applicationContext, cleanUrl)
+                val domainKey = com.videofetcher.manager.CookieManager.getDomainKey(cleanUrl)
+                val platformCookieFile = com.videofetcher.manager.CookieManager.getCookieFileForUrl(applicationContext, cleanUrl)
                 val hasCookies = platformCookieFile != null
                 
                 if (platformCookieFile != null) {
@@ -121,7 +125,7 @@ class DownloadService : Service() {
                     request.addOption("--fragment-retries", "1")
                 }
                 
-                val effectiveUserAgent = com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(
+                val effectiveUserAgent = com.videofetcher.manager.UserAgentManager.getEffectiveUserAgentForDomain(
                     applicationContext,
                     domainKey,
                     isAuthenticated = hasCookies
@@ -279,7 +283,7 @@ class DownloadService : Service() {
                             downloadFinished -> {
                                 break
                             }
-                            hasCookies && com.videofetcher.cookies.NetscapeCookieWriter.isAuthException(postEx.message) && attempt < maxAttempts -> {
+                            hasCookies && com.videofetcher.manager.CookieManager.isAuthException(postEx.message) && attempt < maxAttempts -> {
                                 DownloadManager.updateDownloadState(url, DownloadState.Downloading(
                                     progress = 0f,
                                     status = "Refreshing session & retrying... (Attempt $attempt/$maxAttempts)"
@@ -488,7 +492,7 @@ class DownloadService : Service() {
             val quality = activeQualities.remove(url) ?: "1080p"
             val thumbUrl = DownloadManager.downloadThumbnails.value[url] ?: ""
             
-            PauseRepository(applicationContext).savePausedDownload(
+            PauseManager(applicationContext).savePausedDownload(
                 PausedDownload(url, "Video", quality, progress, thumbUrl)
             )
             DownloadManager.updateDownloadState(url, DownloadState.Cancelled)
@@ -513,7 +517,7 @@ class DownloadService : Service() {
             } catch (e: Exception) { e.printStackTrace() }
             
             DownloadManager.updateDownloadState(url, DownloadState.Cancelled)
-            PauseRepository(applicationContext).removePausedDownload(url)
+            PauseManager(applicationContext).removePausedDownload(url)
             checkPendingQueue()
         }
     }

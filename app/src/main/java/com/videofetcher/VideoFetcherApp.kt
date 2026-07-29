@@ -1,4 +1,6 @@
 package com.videofetcher
+import com.videofetcher.manager.DownloadManager
+import com.videofetcher.manager.PermissionManager
 
 import android.app.Application
 import com.yausername.ffmpeg.FFmpeg

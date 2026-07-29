@@ -1,5 +1,7 @@
 package com.videofetcher.cookies
-
+import com.videofetcher.manager.UserAgentManager
+import com.videofetcher.manager.CookieDomainInfo
+import com.videofetcher.manager.PermissionManager
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
@@ -35,7 +37,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.videofetcher.PermissionManager
 import com.videofetcher.R
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -55,7 +56,7 @@ fun BrowserScreen(
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
 
     val activeDomainKey = remember(currentUrl) {
-        NetscapeCookieWriter.getDomainKey(currentUrl)
+        com.videofetcher.manager.CookieManager.getDomainKey(currentUrl)
     }
 
     // Helper to create clean headers without X-Requested-With
@@ -267,16 +268,16 @@ fun BrowserScreen(
                             )
                             val combinedCookies = domainsToQuery.mapNotNull { cookieManager.getCookie(it) }.joinToString("; ")
 
-                            val hasAuth = NetscapeCookieWriter.hasAuthTokens(activeDomainKey, combinedCookies)
+                            val hasAuth = com.videofetcher.manager.CookieManager.hasAuthTokens(activeDomainKey, combinedCookies)
                             if (hasAuth) {
                                 val liveUserAgent = webViewInstance?.settings?.userAgentString ?: ""
                                 val permissionManager = PermissionManager(context)
                                 if (liveUserAgent.isNotBlank()) {
                                     permissionManager.saveUserAgentForDomain(activeDomainKey, liveUserAgent)
-                                    NetscapeCookieWriter.syncUserAgentToBackup(context, activeDomainKey, liveUserAgent)
+                                    com.videofetcher.manager.CookieManager.syncUserAgentToBackup(context, activeDomainKey, liveUserAgent)
                                 }
 
-                                val success = NetscapeCookieWriter.writeCookies(context, currentUrl, combinedCookies)
+                                val success = com.videofetcher.manager.CookieManager.writeCookies(context, currentUrl, combinedCookies)
                                 if (success) {
                                     Toast.makeText(context, "Cookies saved for ${activeDomainKey.uppercase()}!", Toast.LENGTH_SHORT).show()
                                     onCookiesSaved()
@@ -308,7 +309,7 @@ fun BrowserScreen(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
-                        val domainKey = NetscapeCookieWriter.getDomainKey(initialUrl)
+                        val domainKey = com.videofetcher.manager.CookieManager.getDomainKey(initialUrl)
                         val domainUserAgent = UserAgentManager.getBrowserUserAgentForDomain(ctx, domainKey)
 
                         settings.apply {
@@ -340,7 +341,7 @@ fun BrowserScreen(
                         cookieManager.setAcceptCookie(true)
                         cookieManager.setAcceptThirdPartyCookies(this, true)
 
-                        NetscapeCookieWriter.injectCookiesIntoCookieManager(ctx, initialUrl)
+                        com.videofetcher.manager.CookieManager.injectCookiesIntoCookieManager(ctx, initialUrl)
 
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
