@@ -1,4 +1,4 @@
-package com.videofetcher.settings
+package com.videofetcher.manager
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -78,18 +78,18 @@ class EngineUpdateManager(private val context: Context) {
     /**
      * Compares installed yt-dlp version with latest GitHub tag and returns EngineUpdateState.
      */
-    suspend fun checkEngineStatus(context: Context, forceCheck: Boolean = false): com.videofetcher.EngineUpdateState = withContext(Dispatchers.IO) {
+    suspend fun checkEngineStatus(context: Context, forceCheck: Boolean = false): com.videofetcher.feature.settings.viewmodel.EngineUpdateState = withContext(Dispatchers.IO) {
         val currentVersion = try { YoutubeDL.getInstance().version(context) } catch (e: Exception) { null }
         val latestVersion = fetchLatestVersion(forceCheck)
 
         if (latestVersion != null) {
             if (latestVersion != currentVersion) {
-                com.videofetcher.EngineUpdateState.UpdateAvailable(latestVersion)
+                com.videofetcher.feature.settings.viewmodel.EngineUpdateState.UpdateAvailable(latestVersion)
             } else {
-                if (forceCheck) com.videofetcher.EngineUpdateState.UpToDate else com.videofetcher.EngineUpdateState.Idle
+                if (forceCheck) com.videofetcher.feature.settings.viewmodel.EngineUpdateState.UpToDate else com.videofetcher.feature.settings.viewmodel.EngineUpdateState.Idle
             }
         } else {
-            if (forceCheck) com.videofetcher.EngineUpdateState.Error("Failed to check version. Please check network.") else com.videofetcher.EngineUpdateState.Idle
+            if (forceCheck) com.videofetcher.feature.settings.viewmodel.EngineUpdateState.Error("Failed to check version. Please check network.") else com.videofetcher.feature.settings.viewmodel.EngineUpdateState.Idle
         }
     }
 

@@ -80,6 +80,7 @@ enum class DownloadType {
 @Composable
 fun VideoDownloaderUI(
     viewModel: DownloaderViewModel = viewModel(factory = AppViewModelFactory((androidx.compose.ui.platform.LocalContext.current.applicationContext as VideoFetcherApp).container)),
+    settingsViewModel: com.videofetcher.feature.settings.viewmodel.SettingsViewModel = viewModel(factory = AppViewModelFactory((androidx.compose.ui.platform.LocalContext.current.applicationContext as VideoFetcherApp).container)),
     sharedUrl: String = "",
     isDarkTheme: Boolean,
     onThemeToggle: () -> Unit
@@ -94,7 +95,7 @@ fun VideoDownloaderUI(
     val videoInfoState by viewModel.videoInfoState.collectAsState()
     val filesListState by viewModel.filesListState.collectAsState()
     val pausedDownloads by viewModel.pausedDownloads.collectAsState()
-    val engineUpdateState by viewModel.engineUpdateState.collectAsState()
+    val engineUpdateState by settingsViewModel.engineUpdateState.collectAsState()
 
     var currentTab by remember { mutableStateOf(AppTab.HOME) }
     
@@ -112,7 +113,7 @@ fun VideoDownloaderUI(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.checkForEngineUpdate(context.applicationContext)
+        settingsViewModel.checkForEngineUpdate(context.applicationContext)
     }
 
     // Update URL field automatically when intent brings a new link
@@ -300,26 +301,23 @@ fun VideoDownloaderUI(
                     onRequestPermission = requestStoragePermission
                 )
                 AppTab.FILES -> FilesContent(pausedDownloads, filesListState, viewModel, context, hasStoragePermission, requestStoragePermission)
-                AppTab.SETTINGS -> SettingsContent(
+                AppTab.SETTINGS -> com.videofetcher.feature.settings.ui.SettingsScreen(
                     isDarkTheme = isDarkTheme,
                     onThemeToggle = onThemeToggle,
-                    isResolutionSelectionEnabled = isResolutionSelectionEnabled,
-                    onResolutionSelectionChange = { 
-                        permissionManager.setResolutionSelectionEnabled(it)
-                        isResolutionSelectionEnabled = it
+                    viewModel = settingsViewModel,
+                    onPathChange = { 
+                        viewModel.fetchDownloadedFiles(context)
                     },
-                    viewModel = viewModel,
-                    context = context,
-                    onAboutClick = { showAboutScreen = true },
                     onOpenBrowser = { url -> activeBrowserUrl = url },
                     onOpenCookieManager = { showCookieManager = true },
+                    onAboutClick = { showAboutScreen = true },
                     cookieRefreshTrigger = cookieRefreshTrigger
                 )
             }
         }
     }
     
-    EngineUpdateDialog(engineUpdateState, viewModel, context)
+    EngineUpdateDialog(engineUpdateState, settingsViewModel, context)
     }
 }
 
@@ -980,304 +978,6 @@ fun FilesContent(
 }
 
 @Composable
-fun SettingsContent(
-    isDarkTheme: Boolean, 
-    onThemeToggle: () -> Unit,
-    isResolutionSelectionEnabled: Boolean,
-    onResolutionSelectionChange: (Boolean) -> Unit,
-    viewModel: DownloaderViewModel,
-    context: android.content.Context,
-    onAboutClick: () -> Unit,
-    onOpenBrowser: (String) -> Unit,
-    onOpenCookieManager: () -> Unit,
-    cookieRefreshTrigger: Int
-) {
-    val scrollState = rememberScrollState()
-    val permissionManager = remember { (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager }
-    var currentPath by remember { mutableStateOf(permissionManager.getCustomDownloadFolderPath()) }
-    
-    val folderPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            val success = permissionManager.saveCustomDownloadFolder(uri)
-            if (success) {
-                currentPath = permissionManager.getCustomDownloadFolderPath()
-                Toast.makeText(context, "Download folder updated!", Toast.LENGTH_SHORT).show()
-                viewModel.fetchDownloadedFiles(context)
-            } else {
-                Toast.makeText(context, "Please select a folder on Internal Storage.", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState)) {
-        Text("Settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text("Appearance", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(painterResource(id = if (isDarkTheme) R.drawable.ic_dark_mode else R.drawable.ic_light_mode), contentDescription = "Theme", tint = MaterialTheme.colorScheme.onSurface)
-                Spacer(modifier = Modifier.width(16.dp))
-                Text("Dark Mode", color = MaterialTheme.colorScheme.onSurface)
-            }
-            Switch(
-                checked = isDarkTheme,
-                onCheckedChange = { onThemeToggle() },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                    checkedTrackColor = MaterialTheme.colorScheme.primary,
-                    checkedBorderColor = Color.Transparent,
-                    uncheckedThumbColor = MaterialTheme.colorScheme.surface,
-                    uncheckedTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                    uncheckedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
-                )
-            )
-        }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
-
-        Text("Downloads", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                Text("Select Resolution", color = MaterialTheme.colorScheme.onSurface)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("Fetch metadata to choose video quality. Turn off for instant 'Best Quality' downloads.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
-            }
-            Switch(
-                checked = isResolutionSelectionEnabled,
-                onCheckedChange = { onResolutionSelectionChange(it) },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                    checkedTrackColor = MaterialTheme.colorScheme.primary,
-                    checkedBorderColor = Color.Transparent,
-                    uncheckedThumbColor = MaterialTheme.colorScheme.surface,
-                    uncheckedTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                    uncheckedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
-                )
-            )
-        }
-
-        var isBypassSslEnabled by remember { mutableStateOf(permissionManager.isBypassSslEnabled()) }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                Text("Bypass SSL Validation", color = MaterialTheme.colorScheme.onSurface)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("Skips certificate checks for faster extraction speed.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
-            }
-            Switch(
-                checked = isBypassSslEnabled,
-                onCheckedChange = { enabled ->
-                    isBypassSslEnabled = enabled
-                    permissionManager.setBypassSslEnabled(enabled)
-                },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                    checkedTrackColor = MaterialTheme.colorScheme.primary,
-                    checkedBorderColor = Color.Transparent,
-                    uncheckedThumbColor = MaterialTheme.colorScheme.surface,
-                    uncheckedTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                    uncheckedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
-                )
-            )
-        }
-
-        var isBypassExtractorEnabled by remember { mutableStateOf(permissionManager.isBypassExtractorEnabled()) }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                Text("Direct Link Mode", color = MaterialTheme.colorScheme.onSurface)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("Bypasses deep extractor regex checks for instant link parsing.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
-            }
-            Switch(
-                checked = isBypassExtractorEnabled,
-                onCheckedChange = { enabled ->
-                    isBypassExtractorEnabled = enabled
-                    permissionManager.setBypassExtractorEnabled(enabled)
-                },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                    checkedTrackColor = MaterialTheme.colorScheme.primary,
-                    checkedBorderColor = Color.Transparent,
-                    uncheckedThumbColor = MaterialTheme.colorScheme.surface,
-                    uncheckedTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                    uncheckedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
-                )
-            )
-        }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
-
-        Text("Engine Version", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Filled.Settings, contentDescription = "Engine", tint = MaterialTheme.colorScheme.onSurface)
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                val currentVersion = try { com.yausername.youtubedl_android.YoutubeDL.getInstance().version(context) } catch(e: Exception) { "Unknown" }
-                Text("yt-dlp Engine", color = MaterialTheme.colorScheme.onSurface)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("Version: $currentVersion", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
-            }
-            Spacer(modifier = Modifier.width(16.dp))
-            Button(
-                onClick = { viewModel.checkForEngineUpdate(context, forceCheck = true) }, 
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-            ) { Text("Check", fontWeight = FontWeight.Bold) }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
-        
-        Text("Account Cookies & Web Browser", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.height(4.dp))
-        Text("Sign into any video website via In-App Browser to bypass bot checks, age limits, and private video restrictions.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
-        Spacer(modifier = Modifier.height(8.dp))
-
-        val savedDomains = remember(cookieRefreshTrigger) {
-            (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.getAllSavedCookieDomains(context)
-        }
-
-        // Row 1: In-App Browser
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(painterResource(id = R.drawable.ic_browser), contentDescription = "Browser", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                Text("In-App Browser", color = MaterialTheme.colorScheme.onSurface)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("Browse & sign into any platform", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
-            }
-            Button(
-                onClick = { onOpenBrowser("https://www.google.com") },
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-            ) { Text("Open", fontWeight = FontWeight.Bold) }
-        }
-
-        // Row 2: Cookie Manager
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(painterResource(id = R.drawable.ic_cookie), contentDescription = "Saved Cookies", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                Text("Saved Cookies", color = MaterialTheme.colorScheme.onSurface)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("${savedDomains.size} websites authenticated", color = if (savedDomains.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
-            }
-            Button(
-                onClick = onOpenCookieManager,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-            ) { Text("Manage", fontWeight = FontWeight.Bold) }
-        }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
-        
-        Text("Storage & Cache", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            Icon(painterResource(id = R.drawable.ic_folder), contentDescription = "Folder", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(top = 4.dp))
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Download Location", color = MaterialTheme.colorScheme.onSurface)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(currentPath, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                
-                val defaultPath = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "VideoFetcher").absolutePath
-                if (currentPath != defaultPath) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Reset to Default",
-                        color = MaterialTheme.colorScheme.primary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.clickable {
-                            permissionManager.resetToDefaultFolder()
-                            currentPath = permissionManager.getCustomDownloadFolderPath()
-                            Toast.makeText(context, "Restored to default folder", Toast.LENGTH_SHORT).show()
-                            viewModel.fetchDownloadedFiles(context)
-                        }.padding(vertical = 4.dp)
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(16.dp))
-            Button(
-                onClick = { folderPickerLauncher.launch(null) }, 
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
-                contentPadding = PaddingValues(horizontal = 16.dp)
-            ) { Text("Change", fontWeight = FontWeight.Bold) }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Filled.Delete, contentDescription = "Clear Cache", tint = MaterialTheme.colorScheme.onSurface)
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Clear Thumbnail", color = MaterialTheme.colorScheme.onSurface)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("Frees up storage space", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
-            }
-            Spacer(modifier = Modifier.width(16.dp))
-            Button(
-                onClick = { viewModel.clearThumbnailCache(context) }, 
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-            ) { Text("Clear", fontWeight = FontWeight.Bold) }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .clickable { onAboutClick() }
-                .padding(vertical = 12.dp, horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Filled.Info, contentDescription = "About", tint = MaterialTheme.colorScheme.primary)
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("About this app", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                Spacer(modifier = Modifier.height(2.dp))
-                Text("Privacy, Community, and Contact", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp)
-            }
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-        }
-        
-        Spacer(modifier = Modifier.height(24.dp))
-    }
-}
-
-@Composable
 fun VideoThumbnailBox(
     imageData: Any?,
     isAudio: Boolean = false,
@@ -1822,12 +1522,12 @@ fun ErrorCard(message: String) {
 
 @Composable
 fun EngineUpdateDialog(
-    state: EngineUpdateState,
-    viewModel: DownloaderViewModel,
+    state: com.videofetcher.feature.settings.viewmodel.EngineUpdateState,
+    viewModel: com.videofetcher.feature.settings.viewmodel.SettingsViewModel,
     context: android.content.Context
 ) {
     when (state) {
-        is EngineUpdateState.Checking -> {
+        is com.videofetcher.feature.settings.viewmodel.EngineUpdateState.Checking -> {
             AlertDialog(
                 onDismissRequest = { },
                 title = { Text("Checking for updates...") },
@@ -1835,21 +1535,21 @@ fun EngineUpdateDialog(
                 confirmButton = { }
             )
         }
-        is EngineUpdateState.UpToDate -> {
+        is com.videofetcher.feature.settings.viewmodel.EngineUpdateState.UpToDate -> {
             AlertDialog(
-                onDismissRequest = { viewModel.dismissUpdatePrompt(context) },
+                onDismissRequest = { viewModel.resetEngineUpdateState() },
                 title = { Text("Up to Date") },
                 text = { Text("Your download engine is already on the latest version.") },
                 confirmButton = {
-                    Button(onClick = { viewModel.dismissUpdatePrompt(context) }) {
+                    Button(onClick = { viewModel.resetEngineUpdateState() }) {
                         Text("OK")
                     }
                 }
             )
         }
-        is EngineUpdateState.UpdateAvailable -> {
+        is com.videofetcher.feature.settings.viewmodel.EngineUpdateState.UpdateAvailable -> {
             AlertDialog(
-                onDismissRequest = { viewModel.dismissUpdatePrompt(context) },
+                onDismissRequest = { viewModel.resetEngineUpdateState() },
                 title = { Text("Engine Update Available") },
                 text = { Text("A new version of the download engine (${state.version}) is available. Would you like to update now?") },
                 confirmButton = {
@@ -1858,13 +1558,13 @@ fun EngineUpdateDialog(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { viewModel.dismissUpdatePrompt(context) }) {
+                    TextButton(onClick = { viewModel.resetEngineUpdateState() }) {
                         Text("Later")
                     }
                 }
             )
         }
-        is EngineUpdateState.Updating -> {
+        is com.videofetcher.feature.settings.viewmodel.EngineUpdateState.Updating -> {
             AlertDialog(
                 onDismissRequest = { },
                 title = { Text("Updating Engine...") },
@@ -1878,25 +1578,25 @@ fun EngineUpdateDialog(
                 confirmButton = { }
             )
         }
-        is EngineUpdateState.Success -> {
+        is com.videofetcher.feature.settings.viewmodel.EngineUpdateState.Success -> {
             AlertDialog(
-                onDismissRequest = { viewModel.dismissUpdatePrompt(context) },
+                onDismissRequest = { viewModel.resetEngineUpdateState() },
                 title = { Text("Update Successful") },
                 text = { Text("The engine was updated and rebooted successfully.") },
                 confirmButton = {
-                    Button(onClick = { viewModel.dismissUpdatePrompt(context) }) {
+                    Button(onClick = { viewModel.resetEngineUpdateState() }) {
                         Text("OK")
                     }
                 }
             )
         }
-        is EngineUpdateState.Error -> {
+        is com.videofetcher.feature.settings.viewmodel.EngineUpdateState.Error -> {
             AlertDialog(
-                onDismissRequest = { viewModel.dismissUpdatePrompt(context) },
+                onDismissRequest = { viewModel.resetEngineUpdateState() },
                 title = { Text("Update Failed") },
                 text = { Text(state.message) },
                 confirmButton = {
-                    Button(onClick = { viewModel.dismissUpdatePrompt(context) }) {
+                    Button(onClick = { viewModel.resetEngineUpdateState() }) {
                         Text("Close")
                     }
                 }

@@ -56,15 +56,7 @@ sealed class VideoInfoState {
     data class Error(val message: String) : VideoInfoState()
 }
 
-sealed class EngineUpdateState {
-    object Idle : EngineUpdateState()
-    object Checking : EngineUpdateState()
-    object UpToDate : EngineUpdateState()
-    data class UpdateAvailable(val version: String) : EngineUpdateState()
-    object Updating : EngineUpdateState()
-    object Success : EngineUpdateState()
-    data class Error(val message: String) : EngineUpdateState()
-}
+
 
 class DownloaderViewModel(private val container: AppContainer) : ViewModel() {
     val engineState: StateFlow<EngineState> = container.downloadManager.engineState
@@ -91,8 +83,7 @@ class DownloaderViewModel(private val container: AppContainer) : ViewModel() {
     private val _videoInfoState = MutableStateFlow<VideoInfoState>(VideoInfoState.Idle)
     val videoInfoState: StateFlow<VideoInfoState> = _videoInfoState.asStateFlow()
 
-    private val _engineUpdateState = MutableStateFlow<EngineUpdateState>(EngineUpdateState.Idle)
-    val engineUpdateState: StateFlow<EngineUpdateState> = _engineUpdateState.asStateFlow()
+
 
     private val baseDirName = "VideoFetcher"
     private var fetchJob: Job? = null
@@ -136,32 +127,12 @@ class DownloaderViewModel(private val container: AppContainer) : ViewModel() {
         appContext = null
     }
 
-    fun checkForEngineUpdate(context: Context, forceCheck: Boolean = false) {
-        viewModelScope.launch {
-            if (forceCheck) {
-                _engineUpdateState.value = EngineUpdateState.Checking
-            }
-            _engineUpdateState.value = com.videofetcher.settings.EngineUpdateManager(context).checkEngineStatus(context, forceCheck)
-        }
-    }
 
-    fun updateEngine(context: Context) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _engineUpdateState.value = EngineUpdateState.Updating
-            val success = com.videofetcher.settings.EngineUpdateManager(context).updateYtDlpDirectly(context)
-            if (success) {
-                _engineUpdateState.value = EngineUpdateState.Success
-                delay(2000)
-                _engineUpdateState.value = EngineUpdateState.Idle
-            } else {
-                _engineUpdateState.value = EngineUpdateState.Error("Failed to update engine. Check network connection.")
-            }
-        }
-    }
+
+
 
     fun dismissUpdatePrompt(context: Context) {
-        com.videofetcher.settings.EngineUpdateManager(context).markUpdateSkippedForNow()
-        _engineUpdateState.value = EngineUpdateState.Idle
+        com.videofetcher.manager.EngineUpdateManager(context).markUpdateSkippedForNow()
     }
 
     fun analyzeUrl(url: String, context: Context? = null) {
@@ -722,21 +693,7 @@ class DownloaderViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    fun clearThumbnailCache(context: Context) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val thumbCacheDir = File(context.cacheDir, "thumbnails")
-                if (thumbCacheDir.exists() && thumbCacheDir.isDirectory) {
-                    thumbCacheDir.listFiles()?.forEach { it.delete() }
-                }
-                withContext(Dispatchers.Main) {
-                    android.widget.Toast.makeText(context, "Thumbnail cache cleared", android.widget.Toast.LENGTH_SHORT).show()
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
+
 
     fun resetState(url: String) {
         container.downloadManager.removeDownload(url)

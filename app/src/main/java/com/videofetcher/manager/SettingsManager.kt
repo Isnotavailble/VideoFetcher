@@ -1,4 +1,4 @@
-package com.videofetcher.settings
+package com.videofetcher.manager
 
 import android.content.Context
 import androidx.datastore.core.DataStore

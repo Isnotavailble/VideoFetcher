@@ -9,6 +9,10 @@ class AppViewModelFactory(private val container: AppContainer) : ViewModelProvid
             @Suppress("UNCHECKED_CAST")
             return DownloaderViewModel(container) as T
         }
+        if (modelClass.isAssignableFrom(com.videofetcher.feature.settings.viewmodel.SettingsViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return com.videofetcher.feature.settings.viewmodel.SettingsViewModel(container.settingsRepository) as T
+        }
         throw IllegalArgumentException("Unknown ViewModel class")
     }
 }

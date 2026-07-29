@@ -43,7 +43,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
-import com.videofetcher.settings.SettingsManager
+import com.videofetcher.manager.SettingsManager
 import com.videofetcher.theme.VideoFetcherTheme
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -100,10 +100,11 @@ class QuickDownloadActivity : ComponentActivity() {
                 val isResolutionSelectionEnabled = remember { permissionManager.isResolutionSelectionEnabled() }
                 val viewModel: DownloaderViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = com.videofetcher.AppViewModelFactory((context.applicationContext as com.videofetcher.VideoFetcherApp).container))
                 val videoInfoState by viewModel.videoInfoState.collectAsState()
-                val engineUpdateState by viewModel.engineUpdateState.collectAsState()
+                val settingsViewModel: com.videofetcher.feature.settings.viewmodel.SettingsViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = com.videofetcher.AppViewModelFactory((context.applicationContext as com.videofetcher.VideoFetcherApp).container))
+                val engineUpdateState by settingsViewModel.engineUpdateState.collectAsState()
 
                 LaunchedEffect(Unit) {
-                    viewModel.checkForEngineUpdate(context.applicationContext)
+                    settingsViewModel.checkForEngineUpdate(context.applicationContext)
                 }
 
                 // Automatically trigger the background fetch if the user has the setting enabled
@@ -486,7 +487,7 @@ class QuickDownloadActivity : ComponentActivity() {
                     }
                 }
                 
-                EngineUpdateDialog(engineUpdateState, viewModel, context)
+                EngineUpdateDialog(engineUpdateState, settingsViewModel, context)
             }
         }
     }
