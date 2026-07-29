@@ -3,9 +3,22 @@ package com.videofetcher.manager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import com.videofetcher.EngineState
-import com.videofetcher.DownloadState
+
 class DownloadManager {
+    sealed class EngineState {
+        object Initializing : EngineState()
+        object Idle : EngineState()
+        data class Error(val message: String) : EngineState()
+    }
+
+    sealed class DownloadState {
+        object Queued : DownloadState()
+        data class Downloading(val progress: Float, val status: String) : DownloadState()
+        data class Success(val message: String) : DownloadState()
+        data class Error(val message: String) : DownloadState()
+        object Cancelled : DownloadState()
+    }
+
     private val _engineState = MutableStateFlow<EngineState>(EngineState.Initializing)
     val engineState: StateFlow<EngineState> = _engineState.asStateFlow()
 

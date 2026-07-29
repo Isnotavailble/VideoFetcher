@@ -36,7 +36,7 @@
         
         <!-- The new Transparent Activity for quick sharing -->
         <activity
-            android:name=".QuickDownloadActivity"
+            android:name=".feature.quickshare.QuickDownloadActivity"
             android:exported="true"
             android:theme="@style/Theme.VideoFetcher.Translucent">
             <intent-filter>

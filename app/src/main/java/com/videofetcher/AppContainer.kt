@@ -29,4 +29,8 @@ class AppContainer(private val context: Context) {
     
     val settingsRepository = SettingsRepository(permissionManager)
     val fileRepository = FileRepository(pauseManager, storageManager, mediaMetadataManager, intentManager)
+    
+    val youtubeDlManager = com.videofetcher.manager.YoutubeDlManager(cookieManager, userAgentManager, permissionManager)
+    val downloadQueueManager = com.videofetcher.manager.DownloadQueueManager(downloadManager, pauseManager)
+    val downloadRepository = com.videofetcher.repository.DownloadRepository(youtubeDlManager, downloadQueueManager)
 }

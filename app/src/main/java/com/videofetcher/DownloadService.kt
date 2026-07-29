@@ -1,6 +1,8 @@
 package com.videofetcher
 import com.videofetcher.manager.DownloadManager
 import com.videofetcher.manager.PermissionManager
+import com.videofetcher.manager.DownloadManager.EngineState
+import com.videofetcher.manager.DownloadManager.DownloadState
 
 import android.app.NotificationChannel
 import android.app.NotificationManager

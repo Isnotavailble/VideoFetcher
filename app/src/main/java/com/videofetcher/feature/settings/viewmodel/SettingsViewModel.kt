@@ -64,6 +64,10 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
         }
     }
 
+    fun resetEngineUpdateState() {
+        _engineUpdateState.value = EngineUpdateState.Idle
+    }
+
     fun updateEngine(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             _engineUpdateState.value = EngineUpdateState.Updating
@@ -80,7 +84,4 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
         }
     }
 
-    fun resetEngineUpdateState() {
-        _engineUpdateState.value = EngineUpdateState.Idle
-    }
 }

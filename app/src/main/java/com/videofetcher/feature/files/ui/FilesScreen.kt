@@ -34,7 +34,7 @@ import com.videofetcher.manager.PausedDownload
 import com.videofetcher.feature.files.viewmodel.FilesListState
 import com.videofetcher.feature.files.viewmodel.DownloadedFileDetails
 import com.videofetcher.feature.files.viewmodel.FilesViewModel
-import com.videofetcher.VideoThumbnailBox
+import com.videofetcher.components.VideoThumbnailBox
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
