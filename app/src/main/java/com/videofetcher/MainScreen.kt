@@ -180,6 +180,12 @@ fun VideoDownloaderUI(
             }
         )
     } else {
+        com.videofetcher.feature.settings.ui.EngineUpdateDialog(
+            state = engineUpdateState,
+            viewModel = settingsViewModel,
+            context = context
+        )
+        
         Scaffold(
             bottomBar = {
                 Column(modifier = Modifier.fillMaxWidth()) {
