@@ -110,61 +110,15 @@ class DownloadService : Service() {
                 val targetDir = File(customPath)
                 if (!targetDir.exists()) targetDir.mkdirs()
 
-                val cleanUrl = try {
-                    android.net.Uri.parse(url).buildUpon().clearQuery().build().toString()
-                } catch (e: Exception) {
-                    url
-                }
-                val request = YoutubeDLRequest(cleanUrl)
-                
-                val domainKey = (applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.getDomainKey(cleanUrl)
-                val platformCookieFile = (applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.getCookieFileForUrl(applicationContext, cleanUrl)
-                val hasCookies = platformCookieFile != null
-                
-                if (platformCookieFile != null) {
-                    request.addOption("--cookies", platformCookieFile.absolutePath)
-                    request.addOption("--retries", "2")
-                    request.addOption("--fragment-retries", "1")
-                }
-                
-                val effectiveUserAgent = (applicationContext as com.videofetcher.VideoFetcherApp).container.userAgentManager.getEffectiveUserAgentForDomain(
-                    applicationContext,
-                    domainKey,
-                    isAuthenticated = hasCookies
-                )
-                request.addOption("--user-agent", effectiveUserAgent)
-
-                // Global Speed Optimizations
-                request.addOption("--no-playlist")
-                request.addOption("--no-warnings")
-                request.addOption("--buffer-size", "64K")
-                if (domainKey.lowercase() != "instagram") {
-                    request.addOption("--force-ipv4")
-                }
-
-                // User Preference Speed Toggles
-                if (permissionManager.isBypassSslEnabled()) {
-                    request.addOption("--no-check-certificates")
-                }
-                if (permissionManager.isBypassExtractorEnabled() && domainKey.lowercase() !in listOf("youtube", "facebook", "instagram", "tiktok")) {
-                    request.addOption("--force-generic-extractor")
-                }
+                val config = (applicationContext as com.videofetcher.VideoFetcherApp).container.youtubeDlRequestFactory.createRequest(url, applicationContext, isMetadataOnly = false)
+                val request = config.request
+                val hasCookies = config.hasCookies
 
                 // Asynchronously fetch real video thumbnail in isolated background job (does not block download execution)
                 if ((applicationContext as com.videofetcher.VideoFetcherApp).container.downloadManager.downloadThumbnails.value[url].isNullOrBlank()) {
                     serviceScope.launch(Dispatchers.IO) {
                         try {
-                            val infoReq = YoutubeDLRequest(cleanUrl).apply {
-                                addOption("--no-playlist")
-                                addOption("--no-warnings")
-                                addOption("--user-agent", effectiveUserAgent)
-                                if (domainKey.lowercase() != "instagram") {
-                                    addOption("--force-ipv4")
-                                }
-                                if (platformCookieFile != null) {
-                                    addOption("--cookies", platformCookieFile.absolutePath)
-                                }
-                            }
+                            val infoReq = (applicationContext as com.videofetcher.VideoFetcherApp).container.youtubeDlRequestFactory.createRequest(url, applicationContext, isMetadataOnly = true).request
                             val videoInfo = YoutubeDL.getInstance().getInfo(infoReq)
                             val fetchedThumb = videoInfo.thumbnail ?: ""
                             if (fetchedThumb.isNotBlank()) {

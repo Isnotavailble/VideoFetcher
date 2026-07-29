@@ -18,9 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class HomeViewModel(
-    private val repository: DownloadRepository,
-    private val downloadManager: DownloadManager,
-    private val pauseManager: PauseManager
+    private val repository: DownloadRepository
 ) : ViewModel() {
 
     sealed class VideoInfoState {
@@ -35,8 +33,8 @@ class HomeViewModel(
         data class Error(val message: String) : VideoInfoState()
     }
 
-    val engineState: StateFlow<EngineState> = downloadManager.engineState
-    val activeDownloads: StateFlow<Map<String, DownloadState>> = downloadManager.activeDownloads
+    val engineState: StateFlow<EngineState> = repository.engineState
+    val activeDownloads: StateFlow<Map<String, DownloadState>> = repository.activeDownloads
 
     private val _pausedDownloads = MutableStateFlow<List<PausedDownload>>(emptyList())
     val pausedDownloads: StateFlow<List<PausedDownload>> = _pausedDownloads.asStateFlow()
@@ -102,7 +100,7 @@ class HomeViewModel(
     }
 
     fun fetchPausedDownloads(context: Context) {
-        _pausedDownloads.value = pauseManager.getAllPausedDownloads()
+        _pausedDownloads.value = repository.getAllPausedDownloads()
     }
 
     fun resumeDownload(context: Context, url: String, quality: String) {
@@ -115,11 +113,11 @@ class HomeViewModel(
     }
 
     fun cancelPausedDownload(context: Context, url: String) {
-        pauseManager.removePausedDownload(url)
+        repository.removePausedDownload(url)
         fetchPausedDownloads(context)
     }
 
     fun resetState(url: String) {
-        downloadManager.removeDownload(url)
+        repository.removeDownload(url)
     }
 }

@@ -16,9 +16,7 @@ class AppViewModelFactory(private val container: AppContainer) : ViewModelProvid
         if (modelClass.isAssignableFrom(com.videofetcher.feature.home.viewmodel.HomeViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
             return com.videofetcher.feature.home.viewmodel.HomeViewModel(
-                container.downloadRepository,
-                container.downloadManager,
-                container.pauseManager
+                container.downloadRepository
             ) as T
         }
         if (modelClass.isAssignableFrom(com.videofetcher.feature.quickshare.viewmodel.QuickShareViewModel::class.java)) {

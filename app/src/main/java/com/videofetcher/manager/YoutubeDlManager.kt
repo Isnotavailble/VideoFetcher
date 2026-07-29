@@ -7,57 +7,17 @@ import kotlinx.coroutines.delay
 import java.util.concurrent.TimeUnit
 
 class YoutubeDlManager(
-    private val cookieManager: CookieManager,
-    private val userAgentManager: UserAgentManager,
-    private val permissionManager: PermissionManager
+    private val requestFactory: YoutubeDlRequestFactory,
+    private val cookieManager: CookieManager
 ) {
     suspend fun fetchVideoMetadata(url: String, context: Context): YoutubeVideoMetadata {
-        val cleanUrl = try {
-            android.net.Uri.parse(url).buildUpon().clearQuery().build().toString()
-        } catch (e: Exception) {
-            url
-        }
-        val request = YoutubeDLRequest(cleanUrl)
-
-        val domainKey = cookieManager.getDomainKey(cleanUrl)
-        val platformCookieFile = cookieManager.getCookieFileForUrl(context, cleanUrl)
-        val hasCookies = platformCookieFile != null
-
-        if (platformCookieFile != null) {
-            request.addOption("--cookies", platformCookieFile.absolutePath)
-            request.addOption("--retries", "2")
-            request.addOption("--fragment-retries", "1")
-        }
-
-        val effectiveUserAgent = userAgentManager.getEffectiveUserAgentForDomain(
-            context,
-            domainKey,
-            isAuthenticated = hasCookies
-        )
-        request.addOption("--user-agent", effectiveUserAgent)
-
-        // 1. Global Speed Optimizations & Aggressive Pruning
-        request.addOption("--no-playlist")
-        request.addOption("--no-warnings")
-        request.addOption("--buffer-size", "64K")
-        request.addOption("--no-write-subs")
-
-        // 2. Force IPv4 for non-Instagram requests
-        if (domainKey.lowercase() != "instagram") {
-            request.addOption("--force-ipv4")
-        }
-
-        // 3. User Preference Speed Toggles
-        if (permissionManager.isBypassSslEnabled()) {
-            request.addOption("--no-check-certificates")
-        }
-        if (permissionManager.isBypassExtractorEnabled() && domainKey.lowercase() !in listOf("youtube", "facebook", "instagram", "tiktok")) {
-            request.addOption("--force-generic-extractor")
-        }
+        val config = requestFactory.createRequest(url, context, isMetadataOnly = true)
+        val request = config.request
+        val hasCookies = config.hasCookies
 
         var info: com.yausername.youtubedl_android.mapper.VideoInfo? = null
         var attempt = 0
-        val maxAttempts = if (platformCookieFile != null) 2 else 1
+        val maxAttempts = if (hasCookies) 2 else 1
 
         while (attempt < maxAttempts) {
             attempt++

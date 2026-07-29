@@ -11,6 +11,7 @@ import com.videofetcher.manager.MediaMetadataManager
 import com.videofetcher.manager.IntentManager
 import com.videofetcher.repository.FileRepository
 import com.videofetcher.repository.SettingsRepository
+import com.videofetcher.repository.DownloadRepository
 
 /**
  * Manual Dependency Injection container at the application level.
@@ -30,7 +31,10 @@ class AppContainer(private val context: Context) {
     val settingsRepository = SettingsRepository(permissionManager)
     val fileRepository = FileRepository(pauseManager, storageManager, mediaMetadataManager, intentManager)
     
-    val youtubeDlManager = com.videofetcher.manager.YoutubeDlManager(cookieManager, userAgentManager, permissionManager)
+    val youtubeDlRequestFactory = com.videofetcher.manager.YoutubeDlRequestFactory(cookieManager, userAgentManager, permissionManager)
+    val youtubeDlManager = com.videofetcher.manager.YoutubeDlManager(youtubeDlRequestFactory, cookieManager)
     val downloadQueueManager = com.videofetcher.manager.DownloadQueueManager(downloadManager, pauseManager)
-    val downloadRepository = com.videofetcher.repository.DownloadRepository(youtubeDlManager, downloadQueueManager)
+    val downloadRepository: DownloadRepository by lazy {
+        DownloadRepository(youtubeDlManager, downloadQueueManager, downloadManager, pauseManager)
+    }
 }
