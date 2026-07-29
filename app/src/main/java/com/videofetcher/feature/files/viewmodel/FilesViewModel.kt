@@ -10,6 +10,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 class FilesViewModel(private val repository: FileRepository) : ViewModel() {
     private val _filesListState = MutableStateFlow<FilesListState>(FilesListState.Idle)
@@ -35,21 +40,55 @@ class FilesViewModel(private val repository: FileRepository) : ViewModel() {
         } else emptyMap()
 
         fetchJob = viewModelScope.launch(Dispatchers.IO) {
-            repository.fetchDownloadedFiles(
-                context = context,
-                scope = this,
-                existingFilesMap = existingMap,
-                onUpdateState = { updatedList ->
-                    _filesListState.value = FilesListState.Success(updatedList)
-                    _videoFiles.value = updatedList.filter { !it.isAudio && it.path.endsWith("_vdf.mp4", ignoreCase = true) }
-                    _audioFiles.value = updatedList.filter { it.isAudio }
-                    _videoFiles.value = updatedList.filter { !it.isAudio && it.path.endsWith("_vdf.mp4", ignoreCase = true) }
-                    _audioFiles.value = updatedList.filter { it.isAudio }
-                },
-                onError = { error ->
-                    _filesListState.value = FilesListState.Error(error)
+            try {
+                val initialFiles = repository.getInitialFiles(context, existingMap).toMutableList()
+                
+                // 1. Instantly push the fast media-store items to the UI
+                _filesListState.value = FilesListState.Success(initialFiles.toList())
+                _videoFiles.value = initialFiles.filter { !it.isAudio && it.path.endsWith("_vdf.mp4", ignoreCase = true) }
+                _audioFiles.value = initialFiles.filter { it.isAudio }
+
+                // 2. Identify files that need deep metadata extraction (thumbnails)
+                val itemsToProcess = initialFiles.indices.filter { i ->
+                    initialFiles[i].duration == "--:--" || initialFiles[i].thumbnailUriStr.isEmpty()
                 }
-            )
+
+                if (itemsToProcess.isNotEmpty()) {
+                    val semaphore = Semaphore(2)
+                    var processedCount = 0
+                    
+                    coroutineScope {
+                        itemsToProcess.map { i ->
+                            async(Dispatchers.IO) {
+                                semaphore.withPermit {
+                                    val fileDetails = initialFiles[i]
+                                    val metadata = repository.extractMetadata(context, fileDetails)
+                                    
+                                    if (metadata != null) {
+                                        synchronized(initialFiles) {
+                                            initialFiles[i] = initialFiles[i].copy(
+                                                duration = metadata.first,
+                                                thumbnailUriStr = metadata.second
+                                            )
+                                            processedCount++
+                                        }
+                                        
+                                        // 3. Progressively update UI every 10 items or at completion
+                                        if (processedCount % 10 == 0 || processedCount == itemsToProcess.size) {
+                                            val snapshot = initialFiles.toList()
+                                            _filesListState.value = FilesListState.Success(snapshot)
+                                            _videoFiles.value = snapshot.filter { !it.isAudio && it.path.endsWith("_vdf.mp4", ignoreCase = true) }
+                                            _audioFiles.value = snapshot.filter { it.isAudio }
+                                        }
+                                    }
+                                }
+                            }
+                        }.awaitAll()
+                    }
+                }
+            } catch (e: Exception) {
+                _filesListState.value = FilesListState.Error(e.message ?: "Unknown error")
+            }
         }
     }
 
@@ -61,18 +100,23 @@ class FilesViewModel(private val repository: FileRepository) : ViewModel() {
         onPermissionRequired: () -> Unit
     ) {
         viewModelScope.launch {
-            repository.deleteVideo(context, fileDetails, {
-                val currentState = _filesListState.value
-                if (currentState is FilesListState.Success) {
-                    val updatedList = currentState.files.filter { it.path != fileDetails.path }
-                    _filesListState.value = FilesListState.Success(updatedList)
-                    _videoFiles.value = updatedList.filter { !it.isAudio && it.path.endsWith("_vdf.mp4", ignoreCase = true) }
-                    _audioFiles.value = updatedList.filter { it.isAudio }
-                    _videoFiles.value = updatedList.filter { !it.isAudio && it.path.endsWith("_vdf.mp4", ignoreCase = true) }
-                    _audioFiles.value = updatedList.filter { it.isAudio }
+            try {
+                val isDeleted = repository.deleteVideo(context, fileDetails)
+                if (isDeleted) {
+                    val currentState = _filesListState.value
+                    if (currentState is FilesListState.Success) {
+                        val updatedList = currentState.files.filter { it.path != fileDetails.path }
+                        _filesListState.value = FilesListState.Success(updatedList)
+                        _videoFiles.value = updatedList.filter { !it.isAudio && it.path.endsWith("_vdf.mp4", ignoreCase = true) }
+                        _audioFiles.value = updatedList.filter { it.isAudio }
+                    }
+                    onSuccess()
+                } else {
+                    onPermissionRequired()
                 }
-                onSuccess()
-            }, onError, onPermissionRequired)
+            } catch (e: Exception) {
+                onError(e.message ?: "Unknown error occurred.")
+            }
         }
     }
 
@@ -102,5 +146,3 @@ class FilesViewModel(private val repository: FileRepository) : ViewModel() {
         context.startForegroundService(intent)
     }
 }
-
-

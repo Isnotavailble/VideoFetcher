@@ -6,6 +6,9 @@ import com.videofetcher.manager.DownloadManager
 import com.videofetcher.manager.PauseManager
 import com.videofetcher.manager.PermissionManager
 import com.videofetcher.manager.UserAgentManager
+import com.videofetcher.manager.StorageManager
+import com.videofetcher.manager.MediaMetadataManager
+import com.videofetcher.manager.IntentManager
 import com.videofetcher.repository.FileRepository
 import com.videofetcher.repository.SettingsRepository
 
@@ -20,7 +23,10 @@ class AppContainer(private val context: Context) {
     val userAgentManager = UserAgentManager()
     val permissionManager = PermissionManager(context, userAgentManager)
     val pauseManager = PauseManager(context)
+    val storageManager = StorageManager(permissionManager)
+    val mediaMetadataManager = MediaMetadataManager()
+    val intentManager = IntentManager()
     
     val settingsRepository = SettingsRepository(permissionManager)
-    val fileRepository = FileRepository(pauseManager, permissionManager)
+    val fileRepository = FileRepository(pauseManager, storageManager, mediaMetadataManager, intentManager)
 }
