@@ -1,4 +1,4 @@
-package com.videofetcher.cookies
+package com.videofetcher.feature.cookies
 import com.videofetcher.manager.UserAgentManager
 import com.videofetcher.manager.CookieDomainInfo
 import com.videofetcher.manager.PermissionManager
