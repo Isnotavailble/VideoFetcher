@@ -1,4 +1,4 @@
-package com.videofetcher
+package com.videofetcher.feature.files.viewmodel
 
 import android.net.Uri
 

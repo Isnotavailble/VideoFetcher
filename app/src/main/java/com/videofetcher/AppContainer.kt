@@ -22,5 +22,5 @@ class AppContainer(private val context: Context) {
     val pauseManager = PauseManager(context)
     
     val settingsRepository = SettingsRepository(permissionManager)
-    val fileRepository = FileRepository(pauseManager)
+    val fileRepository = FileRepository(pauseManager, permissionManager)
 }
