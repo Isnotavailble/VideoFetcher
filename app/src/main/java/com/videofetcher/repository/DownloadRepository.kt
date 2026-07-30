@@ -18,6 +18,7 @@ class DownloadRepository(
 ) {
     val engineState: StateFlow<DownloadManager.EngineState> = downloadManager.engineState
     val activeDownloads: StateFlow<Map<String, DownloadManager.DownloadState>> = downloadManager.activeDownloads
+    val pausedDownloadsFlow: StateFlow<List<PausedDownload>> = pauseManager.pausedDownloadsFlow
     fun removeDownload(url: String) {
         downloadManager.removeDownload(url)
     }

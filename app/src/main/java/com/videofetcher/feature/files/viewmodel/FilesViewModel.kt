@@ -3,6 +3,7 @@ package com.videofetcher.feature.files.viewmodel
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.videofetcher.manager.DownloadManager
 import com.videofetcher.repository.FileRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,7 +17,11 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
-class FilesViewModel(private val repository: FileRepository) : ViewModel() {
+class FilesViewModel(
+    private val repository: FileRepository,
+    private val downloadManager: DownloadManager,
+    private val appContext: Context
+) : ViewModel() {
     private val _filesListState = MutableStateFlow<FilesListState>(FilesListState.Idle)
     val filesListState: StateFlow<FilesListState> = _filesListState.asStateFlow()
     private val _videoFiles = MutableStateFlow<List<DownloadedFileDetails>>(emptyList())
@@ -27,7 +32,15 @@ class FilesViewModel(private val repository: FileRepository) : ViewModel() {
 
     private var fetchJob: Job? = null
 
-    fun fetchDownloadedFiles(context: Context) {
+    init {
+        viewModelScope.launch {
+            downloadManager.fileRefreshCounter.collect {
+                fetchDownloadedFiles()
+            }
+        }
+    }
+
+    fun fetchDownloadedFiles() {
         fetchJob?.cancel()
         
         if (_filesListState.value !is FilesListState.Success) {
@@ -41,7 +54,7 @@ class FilesViewModel(private val repository: FileRepository) : ViewModel() {
 
         fetchJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                val initialFiles = repository.getInitialFiles(context, existingMap).toMutableList()
+                val initialFiles = repository.getInitialFiles(appContext, existingMap).toMutableList()
                 
                 // 1. Instantly push the fast media-store items to the UI
                 _filesListState.value = FilesListState.Success(initialFiles.toList())
@@ -62,7 +75,7 @@ class FilesViewModel(private val repository: FileRepository) : ViewModel() {
                             async(Dispatchers.IO) {
                                 semaphore.withPermit {
                                     val fileDetails = initialFiles[i]
-                                    val metadata = repository.extractMetadata(context, fileDetails)
+                                    val metadata = repository.extractMetadata(appContext, fileDetails)
                                     
                                     if (metadata != null) {
                                         synchronized(initialFiles) {
@@ -133,7 +146,7 @@ class FilesViewModel(private val repository: FileRepository) : ViewModel() {
         startDownload(url, quality, context)
     }
 
-    fun cancelPausedDownload(context: Context, url: String) {
+    fun cancelPausedDownload(url: String) {
         repository.removePausedDownload(url)
     }
 

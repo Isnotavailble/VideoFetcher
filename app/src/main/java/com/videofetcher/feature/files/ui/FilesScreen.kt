@@ -71,7 +71,7 @@ fun FilesScreen(
                             fileDetails = fileToDelete,
                             onSuccess = {
                                 Toast.makeText(context, "$typeLabel deleted", Toast.LENGTH_SHORT).show()
-                                viewModel.fetchDownloadedFiles(context.applicationContext)
+                                viewModel.fetchDownloadedFiles()
                             },
                             onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
                             onPermissionRequired = { Toast.makeText(context, "Permission error", Toast.LENGTH_SHORT).show() }
@@ -135,7 +135,7 @@ fun FilesScreen(
                             fileDetails = fileToDelete,
                             onSuccess = {
                                 Toast.makeText(context, "$typeLabel deleted", Toast.LENGTH_SHORT).show()
-                                viewModel.fetchDownloadedFiles(context.applicationContext)
+                                viewModel.fetchDownloadedFiles()
                             },
                             onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() },
                             onPermissionRequired = {
@@ -198,7 +198,7 @@ fun FilesScreen(
                     PausedVideoCard(
                         paused = paused,
                         onResume = { viewModel.resumeDownload(context.applicationContext, paused.url, paused.quality) },
-                        onCancel = { viewModel.cancelPausedDownload(context.applicationContext, paused.url) }
+                        onCancel = { viewModel.cancelPausedDownload(paused.url) }
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                 }

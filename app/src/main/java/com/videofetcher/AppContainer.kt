@@ -19,6 +19,7 @@ import com.videofetcher.repository.DownloadRepository
  * replacing the need for static `object` singletons.
  */
 class AppContainer(private val context: Context) {
+    val appContext: Context = context.applicationContext
     val downloadManager = DownloadManager()
     val cookieManager = CookieManager()
     val userAgentManager = UserAgentManager()
@@ -28,7 +29,7 @@ class AppContainer(private val context: Context) {
     val mediaMetadataManager = MediaMetadataManager()
     val intentManager = IntentManager()
     
-    val settingsRepository = SettingsRepository(permissionManager)
+    val settingsRepository = SettingsRepository(permissionManager, cookieManager)
     val fileRepository = FileRepository(pauseManager, storageManager, mediaMetadataManager, intentManager)
     
     val youtubeDlRequestFactory = com.videofetcher.manager.YoutubeDlRequestFactory(cookieManager, userAgentManager, permissionManager)

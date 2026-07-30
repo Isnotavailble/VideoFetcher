@@ -6,6 +6,9 @@ import android.net.Uri
 import android.os.Environment
 import androidx.core.content.edit
 import java.io.File
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * A helper class to manage persistent folder access permissions using SharedPreferences.
@@ -24,6 +27,15 @@ class PermissionManager(private val context: Context, private val userAgentManag
     companion object {
         val DEFAULT_USER_AGENT: String = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
+
+    private val _resolutionSelectionEnabled = MutableStateFlow(isResolutionSelectionEnabled())
+    val resolutionSelectionEnabledFlow: StateFlow<Boolean> = _resolutionSelectionEnabled.asStateFlow()
+
+    private val _bypassSslEnabled = MutableStateFlow(isBypassSslEnabled())
+    val bypassSslEnabledFlow: StateFlow<Boolean> = _bypassSslEnabled.asStateFlow()
+
+    private val _bypassExtractorEnabled = MutableStateFlow(isBypassExtractorEnabled())
+    val bypassExtractorEnabledFlow: StateFlow<Boolean> = _bypassExtractorEnabled.asStateFlow()
 
     fun getEffectiveUserAgent(): String {
         return userAgentManager.getEffectiveUserAgentForDomain(context, "")
@@ -51,6 +63,7 @@ class PermissionManager(private val context: Context, private val userAgentManag
 
     fun setResolutionSelectionEnabled(enabled: Boolean) {
         prefs.edit { putBoolean("resolution_selection_enabled", enabled) }
+        _resolutionSelectionEnabled.value = enabled
     }
 
     fun isBypassSslEnabled(): Boolean {
@@ -59,6 +72,7 @@ class PermissionManager(private val context: Context, private val userAgentManag
 
     fun setBypassSslEnabled(enabled: Boolean) {
         prefs.edit { putBoolean("bypass_ssl_certificate", enabled) }
+        _bypassSslEnabled.value = enabled
     }
 
     fun isBypassExtractorEnabled(): Boolean {
@@ -67,6 +81,7 @@ class PermissionManager(private val context: Context, private val userAgentManag
 
     fun setBypassExtractorEnabled(enabled: Boolean) {
         prefs.edit { putBoolean("bypass_extractor_check", enabled) }
+        _bypassExtractorEnabled.value = enabled
     }
 
     /**

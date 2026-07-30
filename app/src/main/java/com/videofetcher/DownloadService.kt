@@ -448,7 +448,7 @@ class DownloadService : Service() {
             val quality = activeQualities.remove(url) ?: "1080p"
             val thumbUrl = (applicationContext as com.videofetcher.VideoFetcherApp).container.downloadManager.downloadThumbnails.value[url] ?: ""
             
-            PauseManager(applicationContext).savePausedDownload(
+            (applicationContext as com.videofetcher.VideoFetcherApp).container.pauseManager.savePausedDownload(
                 PausedDownload(url, "Video", quality, progress, thumbUrl)
             )
             (applicationContext as com.videofetcher.VideoFetcherApp).container.downloadManager.updateDownloadState(url, DownloadState.Cancelled)
@@ -473,7 +473,7 @@ class DownloadService : Service() {
             } catch (e: Exception) { e.printStackTrace() }
             
             (applicationContext as com.videofetcher.VideoFetcherApp).container.downloadManager.updateDownloadState(url, DownloadState.Cancelled)
-            PauseManager(applicationContext).removePausedDownload(url)
+            (applicationContext as com.videofetcher.VideoFetcherApp).container.pauseManager.removePausedDownload(url)
             checkPendingQueue()
         }
     }

@@ -7,6 +7,7 @@ import com.videofetcher.manager.MediaMetadataManager
 import com.videofetcher.manager.PauseManager
 import com.videofetcher.manager.PausedDownload
 import com.videofetcher.manager.StorageManager
+import kotlinx.coroutines.flow.StateFlow
 
 class FileRepository(
     private val pauseManager: PauseManager,
@@ -14,6 +15,8 @@ class FileRepository(
     private val mediaMetadataManager: MediaMetadataManager,
     private val intentManager: IntentManager
 ) {
+    val pausedDownloadsFlow: StateFlow<List<PausedDownload>> = pauseManager.pausedDownloadsFlow
+
     fun getAllPausedDownloads(): List<PausedDownload> = pauseManager.getAllPausedDownloads()
     fun removePausedDownload(url: String) = pauseManager.removePausedDownload(url)
     fun savePausedDownload(download: PausedDownload) = pauseManager.savePausedDownload(download)

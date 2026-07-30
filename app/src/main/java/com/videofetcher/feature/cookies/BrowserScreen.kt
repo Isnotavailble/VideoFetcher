@@ -43,8 +43,7 @@ import com.videofetcher.R
 @Composable
 fun BrowserScreen(
     initialUrl: String = "https://www.google.com",
-    onBack: () -> Unit,
-    onCookiesSaved: () -> Unit
+    onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -280,7 +279,6 @@ fun BrowserScreen(
                                 val success = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.writeCookies(context, currentUrl, combinedCookies)
                                 if (success) {
                                     Toast.makeText(context, "Cookies saved for ${activeDomainKey.uppercase()}!", Toast.LENGTH_SHORT).show()
-                                    onCookiesSaved()
                                 } else {
                                     Toast.makeText(context, "Failed to format cookies.", Toast.LENGTH_SHORT).show()
                                 }

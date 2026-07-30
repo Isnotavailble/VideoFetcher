@@ -40,19 +40,16 @@ fun SettingsScreen(
     onPathChange: () -> Unit,
     onOpenBrowser: (String) -> Unit,
     onOpenCookieManager: () -> Unit,
-    onAboutClick: () -> Unit,
-    cookieRefreshTrigger: Int
+    onAboutClick: () -> Unit
 ) {
     val context = LocalContext.current
     val permissionManager = remember { (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager }
-    val engineUpdateState by viewModel.engineUpdateState.collectAsState()
     
-    var isResolutionSelectionEnabled by remember { mutableStateOf(viewModel.isResolutionSelectionEnabled()) }
-    var isBypassSslEnabled by remember { mutableStateOf(viewModel.isBypassSslEnabled()) }
-    var isBypassExtractorEnabled by remember { mutableStateOf(viewModel.isBypassExtractorEnabled()) }
+    val isResolutionSelectionEnabled by viewModel.resolutionSelectionEnabled.collectAsState()
+    val isBypassSslEnabled by viewModel.bypassSslEnabled.collectAsState()
+    val isBypassExtractorEnabled by viewModel.bypassExtractorEnabled.collectAsState()
     
     val onResolutionSelectionChange = { enabled: Boolean ->
-        isResolutionSelectionEnabled = enabled
         viewModel.setResolutionSelectionEnabled(enabled)
     }
 
@@ -130,7 +127,6 @@ fun SettingsScreen(
             )
         }
 
-        var isBypassSslEnabled by remember { mutableStateOf(permissionManager.isBypassSslEnabled()) }
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
@@ -143,8 +139,7 @@ fun SettingsScreen(
             Switch(
                 checked = isBypassSslEnabled,
                 onCheckedChange = { enabled ->
-                    isBypassSslEnabled = enabled
-                    permissionManager.setBypassSslEnabled(enabled)
+                    viewModel.setBypassSslEnabled(enabled)
                 },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
@@ -157,7 +152,6 @@ fun SettingsScreen(
             )
         }
 
-        var isBypassExtractorEnabled by remember { mutableStateOf(permissionManager.isBypassExtractorEnabled()) }
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
@@ -170,8 +164,7 @@ fun SettingsScreen(
             Switch(
                 checked = isBypassExtractorEnabled,
                 onCheckedChange = { enabled ->
-                    isBypassExtractorEnabled = enabled
-                    permissionManager.setBypassExtractorEnabled(enabled)
+                    viewModel.setBypassExtractorEnabled(enabled)
                 },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
@@ -214,9 +207,7 @@ fun SettingsScreen(
         Text("Sign into any video website via In-App Browser to bypass bot checks, age limits, and private video restrictions.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 12.sp, lineHeight = 16.sp)
         Spacer(modifier = Modifier.height(8.dp))
 
-        val savedDomains = remember(cookieRefreshTrigger) {
-            (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.getAllSavedCookieDomains(context)
-        }
+        val savedDomains by viewModel.getSavedCookieDomains(context).collectAsState()
 
         // Row 1: In-App Browser
         Row(

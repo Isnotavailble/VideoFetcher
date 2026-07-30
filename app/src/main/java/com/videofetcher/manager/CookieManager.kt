@@ -8,6 +8,9 @@ import android.provider.DocumentsContract
 import android.webkit.CookieManager as WebkitCookieManager
 import java.io.File
 import java.net.URI
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 data class CookieDomainInfo(
     val domainKey: String,
@@ -20,6 +23,13 @@ data class CookieDomainInfo(
 class CookieManager {
 
     private val HEADER = "# Netscape HTTP Cookie File\n# http://curl.haxx.se/rfc/cookie_spec.html\n# This is a generated file! Do not edit.\n\n"
+
+    private val _cookieUpdates = MutableStateFlow(0L)
+    val cookieUpdates: StateFlow<Long> = _cookieUpdates.asStateFlow()
+
+    private fun triggerCookieUpdate() {
+        _cookieUpdates.value = System.currentTimeMillis()
+    }
 
     /**
      * Dynamically extracts a clean primary domain key for ANY website URL or domain string.
@@ -219,6 +229,7 @@ class CookieManager {
             e.printStackTrace()
         }
 
+        if (restoredAny) triggerCookieUpdate()
         return restoredAny
     }
 
@@ -275,6 +286,7 @@ class CookieManager {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        triggerCookieUpdate()
     }
 
     /**
@@ -376,6 +388,7 @@ class CookieManager {
             pushed++
         }
 
+        if (pulled > 0 || pushed > 0) triggerCookieUpdate()
         return Pair(pulled, pushed)
     }
 
@@ -538,6 +551,7 @@ class CookieManager {
             }
 
             file.writeText(HEADER + cookieMap.values.joinToString("\n") + "\n")
+            triggerCookieUpdate()
             return true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -604,7 +618,11 @@ class CookieManager {
     fun deleteCookieFile(context: Context, domainKey: String): Boolean {
         return try {
             val privateFile = File(context.filesDir, "${domainKey}_cookies.txt")
-            if (privateFile.exists()) privateFile.delete() else false
+            if (privateFile.exists()) {
+                privateFile.delete()
+                triggerCookieUpdate()
+                true
+            } else false
         } catch (e: Exception) {
             e.printStackTrace()
             false
@@ -621,6 +639,7 @@ class CookieManager {
                 deletedAny = true
             }
         }
+        if (deletedAny) triggerCookieUpdate()
         return deletedAny
     }
 }

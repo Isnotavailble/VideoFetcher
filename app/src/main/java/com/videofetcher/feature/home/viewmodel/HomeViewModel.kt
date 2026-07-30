@@ -36,8 +36,7 @@ class HomeViewModel(
     val engineState: StateFlow<EngineState> = repository.engineState
     val activeDownloads: StateFlow<Map<String, DownloadState>> = repository.activeDownloads
 
-    private val _pausedDownloads = MutableStateFlow<List<PausedDownload>>(emptyList())
-    val pausedDownloads: StateFlow<List<PausedDownload>> = _pausedDownloads.asStateFlow()
+    val pausedDownloads: StateFlow<List<PausedDownload>> = repository.pausedDownloadsFlow
 
     private val _videoInfoState = MutableStateFlow<VideoInfoState>(VideoInfoState.Idle)
     val videoInfoState: StateFlow<VideoInfoState> = _videoInfoState.asStateFlow()
@@ -99,22 +98,16 @@ class HomeViewModel(
         repository.cancelDownload(context, url)
     }
 
-    fun fetchPausedDownloads(context: Context) {
-        _pausedDownloads.value = repository.getAllPausedDownloads()
-    }
-
     fun resumeDownload(context: Context, url: String, quality: String) {
         val currentInfo = _videoInfoState.value
         val thumbUrl = if (currentInfo is VideoInfoState.Success) currentInfo.thumbnailUrl else ""
         val titleText = if (currentInfo is VideoInfoState.Success) currentInfo.title else "Video"
         
         repository.resumeDownload(context, url, quality, thumbUrl, titleText)
-        fetchPausedDownloads(context)
     }
 
-    fun cancelPausedDownload(context: Context, url: String) {
+    fun cancelPausedDownload(url: String) {
         repository.removePausedDownload(url)
-        fetchPausedDownloads(context)
     }
 
     fun resetState(url: String) {

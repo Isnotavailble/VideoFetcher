@@ -58,17 +58,13 @@ fun VideoDownloaderUI(
 
     var currentTab by remember { mutableStateOf(AppTab.HOME) }
     
-    val permissionManager = remember { (context.applicationContext as VideoFetcherApp).container.permissionManager }
-    var isResolutionSelectionEnabled by remember { mutableStateOf(permissionManager.isResolutionSelectionEnabled()) }
+    val isResolutionSelectionEnabled by settingsViewModel.resolutionSelectionEnabled.collectAsState()
 
-    val successCount = activeDownloads.values.count { it is DownloadState.Success }
-    val activeCount = activeDownloads.size
-    val refreshCounter by (context.applicationContext as VideoFetcherApp).container.downloadManager.fileRefreshCounter.collectAsState()
-    
-    LaunchedEffect(successCount, activeCount, refreshCounter) {
-        viewModel.fetchPausedDownloads(context.applicationContext)
-        filesViewModel.fetchDownloadedFiles(context.applicationContext)
-    }
+    com.videofetcher.feature.settings.ui.EngineUpdateDialog(
+        state = engineUpdateState,
+        viewModel = settingsViewModel,
+        context = context
+    )
 
     LaunchedEffect(Unit) {
         settingsViewModel.checkForEngineUpdate(context.applicationContext)
@@ -111,7 +107,7 @@ fun VideoDownloaderUI(
         contract = ActivityResultContracts.RequestPermission()
     ) {
         if (hasStoragePermission) {
-            filesViewModel.fetchDownloadedFiles(context.applicationContext)
+            filesViewModel.fetchDownloadedFiles()
         }
     }
 
@@ -126,7 +122,7 @@ fun VideoDownloaderUI(
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else if (hasStoragePermission) {
-            filesViewModel.fetchDownloadedFiles(context.applicationContext)
+            filesViewModel.fetchDownloadedFiles()
         }
     }
 
@@ -152,7 +148,7 @@ fun VideoDownloaderUI(
             delay(500)
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            filesViewModel.fetchDownloadedFiles(context.applicationContext)
+            filesViewModel.fetchDownloadedFiles()
         }
     }
 
@@ -161,15 +157,13 @@ fun VideoDownloaderUI(
     var showAboutScreen by remember { mutableStateOf(false) }
     var activeBrowserUrl by remember { mutableStateOf<String?>(null) }
     var showCookieManager by remember { mutableStateOf(false) }
-    var cookieRefreshTrigger by remember { mutableStateOf(0) }
 
     if (showAboutScreen) {
         AboutScreen(onBack = { showAboutScreen = false })
     } else if (activeBrowserUrl != null) {
         BrowserScreen(
             initialUrl = activeBrowserUrl!!,
-            onBack = { activeBrowserUrl = null },
-            onCookiesSaved = { cookieRefreshTrigger++ }
+            onBack = { activeBrowserUrl = null }
         )
     } else if (showCookieManager) {
         CookieManagementScreen(
@@ -180,12 +174,6 @@ fun VideoDownloaderUI(
             }
         )
     } else {
-        com.videofetcher.feature.settings.ui.EngineUpdateDialog(
-            state = engineUpdateState,
-            viewModel = settingsViewModel,
-            context = context
-        )
-        
         Scaffold(
             bottomBar = {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -268,12 +256,11 @@ fun VideoDownloaderUI(
                         onThemeToggle = onThemeToggle,
                         viewModel = settingsViewModel,
                         onPathChange = { 
-                            filesViewModel.fetchDownloadedFiles(context)
+                            filesViewModel.fetchDownloadedFiles()
                         },
                         onOpenBrowser = { browserUrl -> activeBrowserUrl = browserUrl },
                         onOpenCookieManager = { showCookieManager = true },
-                        onAboutClick = { showAboutScreen = true },
-                        cookieRefreshTrigger = cookieRefreshTrigger
+                        onAboutClick = { showAboutScreen = true }
                     )
                 }
             }

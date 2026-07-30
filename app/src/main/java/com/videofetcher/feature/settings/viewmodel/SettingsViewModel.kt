@@ -10,8 +10,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.launch
 import java.io.File
+import com.videofetcher.manager.CookieDomainInfo
 
 sealed class EngineUpdateState {
     object Idle : EngineUpdateState()
@@ -30,12 +34,21 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
 
     fun isResolutionSelectionEnabled(): Boolean = repository.isResolutionSelectionEnabled()
     fun setResolutionSelectionEnabled(enabled: Boolean) = repository.setResolutionSelectionEnabled(enabled)
+    val resolutionSelectionEnabled: StateFlow<Boolean> = repository.resolutionSelectionEnabledFlow
 
     fun isBypassSslEnabled(): Boolean = repository.isBypassSslEnabled()
     fun setBypassSslEnabled(enabled: Boolean) = repository.setBypassSslEnabled(enabled)
+    val bypassSslEnabled: StateFlow<Boolean> = repository.bypassSslEnabledFlow
 
     fun isBypassExtractorEnabled(): Boolean = repository.isBypassExtractorEnabled()
     fun setBypassExtractorEnabled(enabled: Boolean) = repository.setBypassExtractorEnabled(enabled)
+    val bypassExtractorEnabled: StateFlow<Boolean> = repository.bypassExtractorEnabledFlow
+
+    fun getSavedCookieDomains(context: Context): StateFlow<List<CookieDomainInfo>> {
+        return repository.cookieUpdates.map {
+            repository.getAllSavedCookieDomains(context)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), repository.getAllSavedCookieDomains(context))
+    }
 
     fun clearThumbnailCache(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
