@@ -17,8 +17,9 @@ class StorageManager(private val permissionManager: PermissionManager) {
         val fileSet = mutableSetOf<String>()
         val filesList = mutableListOf<File>()
 
-        val mediaStoreMetadataMap = getMediaStoreMetadata(context, targetDir, fileSet, filesList)
-        val fileRegex = Regex(".*_vdf\\.[^.]+$", RegexOption.IGNORE_CASE)
+        val fileRegex = Regex(".*_vdf\\.(mp4|mp3|m4a)$", RegexOption.IGNORE_CASE)
+        val mediaStoreMetadataMap = getMediaStoreMetadata(context, targetDir, fileSet, filesList, fileRegex)
+        
         val directFiles = getDirectFiles(targetDir, fileSet, fileRegex)
         filesList.addAll(directFiles)
         
@@ -51,7 +52,7 @@ class StorageManager(private val permissionManager: PermissionManager) {
         }
     }
 
-    private fun getMediaStoreMetadata(context: Context, targetDir: File, fileSet: MutableSet<String>, filesList: MutableList<File>): Map<String, Pair<Long, Long>> {
+    private fun getMediaStoreMetadata(context: Context, targetDir: File, fileSet: MutableSet<String>, filesList: MutableList<File>, fileRegex: Regex): Map<String, Pair<Long, Long>> {
         val mediaStoreMetadataMap = mutableMapOf<String, Pair<Long, Long>>()
         try {
             val projection = arrayOf(
@@ -78,7 +79,7 @@ class StorageManager(private val permissionManager: PermissionManager) {
                         val path = if (dataCol >= 0) cursor.getString(dataCol) else null
                         if (path != null && path.startsWith(targetDir.absolutePath)) {
                             val file = File(path)
-                            if (file.exists() && fileSet.add(path)) {
+                            if (file.exists() && file.name.matches(fileRegex) && fileSet.add(path)) {
                                 filesList.add(file)
                                 val durationMs = if (durationCol >= 0) cursor.getLong(durationCol) else 0L
                                 val msSize = if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L
