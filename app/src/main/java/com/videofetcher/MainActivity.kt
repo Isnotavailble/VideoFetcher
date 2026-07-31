@@ -12,7 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
-import com.videofetcher.settings.SettingsManager
+import com.videofetcher.manager.SettingsManager
 import com.videofetcher.theme.VideoFetcherTheme
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.Dispatchers

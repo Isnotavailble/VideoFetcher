@@ -1,13 +1,16 @@
-package com.videofetcher.cookies
+package com.videofetcher.manager
 
+import com.videofetcher.manager.PermissionManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
-import android.webkit.CookieManager
-import com.videofetcher.PermissionManager
+import android.webkit.CookieManager as WebkitCookieManager
 import java.io.File
 import java.net.URI
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 data class CookieDomainInfo(
     val domainKey: String,
@@ -17,9 +20,16 @@ data class CookieDomainInfo(
     val cookieCount: Int
 )
 
-object NetscapeCookieWriter {
+class CookieManager {
 
-    private const val HEADER = "# Netscape HTTP Cookie File\n# http://curl.haxx.se/rfc/cookie_spec.html\n# This is a generated file! Do not edit.\n\n"
+    private val HEADER = "# Netscape HTTP Cookie File\n# http://curl.haxx.se/rfc/cookie_spec.html\n# This is a generated file! Do not edit.\n\n"
+
+    private val _cookieUpdates = MutableStateFlow(0L)
+    val cookieUpdates: StateFlow<Long> = _cookieUpdates.asStateFlow()
+
+    private fun triggerCookieUpdate() {
+        _cookieUpdates.value = System.currentTimeMillis()
+    }
 
     /**
      * Dynamically extracts a clean primary domain key for ANY website URL or domain string.
@@ -63,7 +73,7 @@ object NetscapeCookieWriter {
      * Resolves the persistent backup directory (.cookies inside VideoFetcher download folder).
      */
     fun getPersistentBackupDir(context: Context): File {
-        val permissionManager = PermissionManager(context)
+        val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
         val customPath = permissionManager.getCustomDownloadFolderPath()
         val backupDir = File(customPath, ".cookies")
         try {
@@ -78,7 +88,7 @@ object NetscapeCookieWriter {
      * Resolves the persistent User-Agent backup directory (.useragent inside VideoFetcher download folder).
      */
     fun getPersistentUserAgentDir(context: Context): File {
-        val permissionManager = PermissionManager(context)
+        val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
         val customPath = permissionManager.getCustomDownloadFolderPath()
         val backupDir = File(customPath, ".useragent")
         try {
@@ -112,7 +122,7 @@ object NetscapeCookieWriter {
         if (!file.exists() || file.length() <= HEADER.length) return
 
         try {
-            val cookieManager = CookieManager.getInstance()
+            val cookieManager = WebkitCookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
 
             file.readLines().forEach { line ->
@@ -145,7 +155,7 @@ object NetscapeCookieWriter {
      */
     fun restoreFromSafTreeUri(context: Context, treeUri: Uri): Boolean {
         var restoredAny = false
-        val permissionManager = PermissionManager(context)
+        val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
         val contentResolver = context.contentResolver
         val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
 
@@ -219,6 +229,7 @@ object NetscapeCookieWriter {
             e.printStackTrace()
         }
 
+        if (restoredAny) triggerCookieUpdate()
         return restoredAny
     }
 
@@ -226,7 +237,7 @@ object NetscapeCookieWriter {
      * Restores surviving cookie files and User-Agent files into context.filesDir / SharedPreferences after app reinstall.
      */
     fun restoreAllBackupsToPrivateStorage(context: Context) {
-        val permissionManager = PermissionManager(context)
+        val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
 
         // 1. Direct File access for .cookies
         try {
@@ -271,10 +282,11 @@ object NetscapeCookieWriter {
 
         // 3. Delegate User-Agent restoration to UserAgentManager
         try {
-            UserAgentManager.restoreAllUserAgentsToPrivateStorage(context)
+            (context.applicationContext as com.videofetcher.VideoFetcherApp).container.userAgentManager.restoreAllUserAgentsToPrivateStorage(context)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        triggerCookieUpdate()
     }
 
     /**
@@ -284,12 +296,181 @@ object NetscapeCookieWriter {
         return File(context.filesDir, "${domainKey}_cookies.txt")
     }
 
-    private fun syncToBackup(context: Context, domainKey: String, sourcePrivateFile: File) {
+    fun isAuthException(errorMessage: String?): Boolean {
+        if (errorMessage.isNullOrBlank()) return false
+        val lower = errorMessage.lowercase()
+        if (lower.contains("sign in") ||
+            lower.contains("login required") ||
+            lower.contains("private video") ||
+            lower.contains("authentication") ||
+            lower.contains("confirm you")) return true
+        return false
+    }
+
+    /**
+     * Bi-directional Smart Sync:
+     * 1. PULL (Restore): Pulls missing cookies from .cookies/ backup folder into context.filesDir without losing deleted ones.
+     * 2. PUSH (Backup): Pushes all active and newly logged-in cookies from context.filesDir to .cookies/ backup folder.
+     * Returns Pair(pulledCount, pushedCount).
+     */
+    fun smartSyncCookies(context: Context): Pair<Int, Int> {
+        var pulled = 0
+        var pushed = 0
+        val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
+
+        // --- Phase 1: PULL / RESTORE Missing Cookies from Backup ---
         try {
             val backupDir = getPersistentBackupDir(context)
-            val backupFile = File(backupDir, "${domainKey}_cookies.txt")
-            if (sourcePrivateFile.exists() && sourcePrivateFile.length() > 0) {
-                sourcePrivateFile.copyTo(backupFile, overwrite = true)
+            if (backupDir.exists() && backupDir.isDirectory) {
+                val files = backupDir.listFiles()
+                if (files != null) {
+                    for (file in files) {
+                        if (file.isFile && file.name.endsWith("_cookies.txt") && file.length() > HEADER.length) {
+                            val targetFile = File(context.filesDir, file.name)
+                            if (!targetFile.exists()) {
+                                file.copyTo(targetFile, overwrite = true)
+                                pulled++
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        val treeUri = permissionManager.getCustomDownloadFolderUri() ?: permissionManager.getSavedFolderUri()
+        if (treeUri != null) {
+            try {
+                val contentResolver = context.contentResolver
+                val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+                val cookiesDocId = "$treeDocumentId/.cookies"
+                val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, cookiesDocId)
+                val projection = arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_SIZE
+                )
+
+                contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                    val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    val sizeCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE)
+
+                    while (cursor.moveToNext()) {
+                        val docId = cursor.getString(idCol)
+                        val name = cursor.getString(nameCol)
+                        val size = cursor.getLong(sizeCol)
+
+                        if (!name.isNullOrBlank() && name.endsWith("_cookies.txt") && size > HEADER.length) {
+                            val targetFile = File(context.filesDir, name)
+                            if (!targetFile.exists()) {
+                                val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                                contentResolver.openInputStream(fileUri)?.use { inputStream ->
+                                    targetFile.outputStream().use { outputStream ->
+                                        inputStream.copyTo(outputStream)
+                                    }
+                                    pulled++
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        // --- Phase 2: PUSH / BACKUP Active & New Cookies to Backup ---
+        val activeDomains = getAllSavedCookieDomains(context)
+        for (info in activeDomains) {
+            syncPrivateToBackup(context, info.domainKey)
+            pushed++
+        }
+
+        if (pulled > 0 || pushed > 0) triggerCookieUpdate()
+        return Pair(pulled, pushed)
+    }
+
+    fun backupAllCookiesToSafTree(context: Context): Boolean {
+        val (pulled, pushed) = smartSyncCookies(context)
+        return pulled > 0 || pushed > 0
+    }
+
+    fun syncPrivateToBackup(context: Context, domainKey: String) {
+        if (domainKey.isBlank()) return
+        try {
+            val privateFile = getCookieFile(context, domainKey)
+            if (!privateFile.exists() || privateFile.length() <= 0) return
+
+            // 1. Direct File Copy
+            try {
+                val backupDir = getPersistentBackupDir(context)
+                if (!backupDir.exists()) backupDir.mkdirs()
+                val backupFile = File(backupDir, "${domainKey}_cookies.txt")
+                privateFile.copyTo(backupFile, overwrite = true)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            // 2. SAF Tree Uri Fallback for Scoped Storage
+            val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
+            val treeUri = permissionManager.getCustomDownloadFolderUri() ?: permissionManager.getSavedFolderUri()
+            if (treeUri != null) {
+                try {
+                    val contentResolver = context.contentResolver
+                    val treeDocId = DocumentsContract.getTreeDocumentId(treeUri)
+                    val cookieFileName = "${domainKey}_cookies.txt"
+
+                    var cookiesFolderUri: Uri? = null
+                    val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocId)
+                    contentResolver.query(childrenUri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
+                        val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                        val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                        while (cursor.moveToNext()) {
+                            if (cursor.getString(nameCol) == ".cookies") {
+                                cookiesFolderUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(idCol))
+                                break
+                            }
+                        }
+                    }
+
+                    if (cookiesFolderUri == null) {
+                        val parentDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId)
+                        cookiesFolderUri = DocumentsContract.createDocument(contentResolver, parentDocUri, DocumentsContract.Document.MIME_TYPE_DIR, ".cookies")
+                    }
+
+                    if (cookiesFolderUri != null) {
+                        val cookiesFolderId = DocumentsContract.getDocumentId(cookiesFolderUri!!)
+                        val cookiesChildUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, cookiesFolderId)
+                        var targetDocUri: Uri? = null
+
+                        contentResolver.query(cookiesChildUri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
+                            val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                            val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                            while (cursor.moveToNext()) {
+                                if (cursor.getString(nameCol) == cookieFileName) {
+                                    targetDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(idCol))
+                                    break
+                                }
+                            }
+                        }
+
+                        if (targetDocUri == null) {
+                            targetDocUri = DocumentsContract.createDocument(contentResolver, cookiesFolderUri!!, "text/plain", cookieFileName)
+                        }
+
+                        if (targetDocUri != null) {
+                            contentResolver.openOutputStream(targetDocUri!!, "rwt")?.use { out ->
+                                privateFile.inputStream().use { input ->
+                                    input.copyTo(out)
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -317,7 +498,7 @@ object NetscapeCookieWriter {
 
     /**
      * Converts raw cookies from CookieManager into Netscape HTTP Cookie format
-     * and saves to domain_cookies.txt (both private storage and .cookies backup).
+     * and saves to domain_cookies.txt in app private storage.
      */
     fun writeCookies(context: Context, domainOrUrl: String, rawCookieString: String): Boolean {
         val domainKey = getDomainKey(domainOrUrl)
@@ -370,7 +551,7 @@ object NetscapeCookieWriter {
             }
 
             file.writeText(HEADER + cookieMap.values.joinToString("\n") + "\n")
-            syncToBackup(context, domainKey, file)
+            triggerCookieUpdate()
             return true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -379,12 +560,25 @@ object NetscapeCookieWriter {
     }
 
     /**
-     * Resolves the input URL's domain key and returns its cookie file if an active cookie file exists in private storage.
+     * Resolves the input URL's domain key and returns its cookie file if an active user-authenticated cookie file exists in private storage.
      */
     fun getCookieFileForUrl(context: Context, inputUrl: String): File? {
         val domainKey = getDomainKey(inputUrl)
         val file = File(context.filesDir, "${domainKey}_cookies.txt")
-        return if (file.exists() && file.length() > HEADER.length) file else null
+        if (!file.exists() || file.length() <= HEADER.length) return null
+
+        val hasUserCookies = try {
+            file.useLines { lines ->
+                lines.any { line ->
+                    val trimmed = line.trim()
+                    trimmed.isNotBlank() && !trimmed.startsWith("#")
+                }
+            }
+        } catch (e: Exception) {
+            false
+        }
+
+        return if (hasUserCookies) file else null
     }
 
     /**
@@ -424,7 +618,11 @@ object NetscapeCookieWriter {
     fun deleteCookieFile(context: Context, domainKey: String): Boolean {
         return try {
             val privateFile = File(context.filesDir, "${domainKey}_cookies.txt")
-            if (privateFile.exists()) privateFile.delete() else false
+            if (privateFile.exists()) {
+                privateFile.delete()
+                triggerCookieUpdate()
+                true
+            } else false
         } catch (e: Exception) {
             e.printStackTrace()
             false
@@ -441,6 +639,7 @@ object NetscapeCookieWriter {
                 deletedAny = true
             }
         }
+        if (deletedAny) triggerCookieUpdate()
         return deletedAny
     }
 }

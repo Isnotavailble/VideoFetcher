@@ -1,4 +1,4 @@
-package com.videofetcher.settings
+package com.videofetcher.manager
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -9,7 +9,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-class EngineUpdateManager(context: Context) {
+class EngineUpdateManager(private val context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("engine_update_prefs", Context.MODE_PRIVATE)
 
     companion object {
@@ -51,6 +51,7 @@ class EngineUpdateManager(context: Context) {
                 val connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "HEAD"
                     instanceFollowRedirects = false // Catch the 302 redirect
+                    setRequestProperty("User-Agent", (context.applicationContext as com.videofetcher.VideoFetcherApp).container.userAgentManager.DESKTOP_USER_AGENT)
                     connectTimeout = 8000
                     readTimeout = 8000
                 }
@@ -77,18 +78,18 @@ class EngineUpdateManager(context: Context) {
     /**
      * Compares installed yt-dlp version with latest GitHub tag and returns EngineUpdateState.
      */
-    suspend fun checkEngineStatus(context: Context, forceCheck: Boolean = false): com.videofetcher.EngineUpdateState = withContext(Dispatchers.IO) {
+    suspend fun checkEngineStatus(context: Context, forceCheck: Boolean = false): com.videofetcher.feature.settings.viewmodel.EngineUpdateState = withContext(Dispatchers.IO) {
         val currentVersion = try { YoutubeDL.getInstance().version(context) } catch (e: Exception) { null }
         val latestVersion = fetchLatestVersion(forceCheck)
 
         if (latestVersion != null) {
             if (latestVersion != currentVersion) {
-                com.videofetcher.EngineUpdateState.UpdateAvailable(latestVersion)
+                com.videofetcher.feature.settings.viewmodel.EngineUpdateState.UpdateAvailable(latestVersion)
             } else {
-                if (forceCheck) com.videofetcher.EngineUpdateState.UpToDate else com.videofetcher.EngineUpdateState.Idle
+                if (forceCheck) com.videofetcher.feature.settings.viewmodel.EngineUpdateState.UpToDate else com.videofetcher.feature.settings.viewmodel.EngineUpdateState.Idle
             }
         } else {
-            if (forceCheck) com.videofetcher.EngineUpdateState.Error("Failed to check version. Please check network.") else com.videofetcher.EngineUpdateState.Idle
+            if (forceCheck) com.videofetcher.feature.settings.viewmodel.EngineUpdateState.Error("Failed to check version. Please check network.") else com.videofetcher.feature.settings.viewmodel.EngineUpdateState.Idle
         }
     }
 
@@ -117,7 +118,7 @@ class EngineUpdateManager(context: Context) {
                 val binaryUrl = URL(urlString)
                 val connection = (binaryUrl.openConnection() as HttpURLConnection).apply {
                     instanceFollowRedirects = true
-                    setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)")
+                    setRequestProperty("User-Agent", (context.applicationContext as com.videofetcher.VideoFetcherApp).container.userAgentManager.DESKTOP_USER_AGENT)
                     connectTimeout = 15000
                     readTimeout = 15000
                 }

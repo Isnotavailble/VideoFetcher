@@ -1,5 +1,7 @@
-package com.videofetcher.cookies
-
+package com.videofetcher.feature.cookies
+import com.videofetcher.manager.UserAgentManager
+import com.videofetcher.manager.CookieDomainInfo
+import com.videofetcher.manager.PermissionManager
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
@@ -35,15 +37,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.videofetcher.PermissionManager
 import com.videofetcher.R
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun BrowserScreen(
     initialUrl: String = "https://www.google.com",
-    onBack: () -> Unit,
-    onCookiesSaved: () -> Unit
+    onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -55,7 +55,7 @@ fun BrowserScreen(
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
 
     val activeDomainKey = remember(currentUrl) {
-        NetscapeCookieWriter.getDomainKey(currentUrl)
+        (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.getDomainKey(currentUrl)
     }
 
     // Helper to create clean headers without X-Requested-With
@@ -267,19 +267,18 @@ fun BrowserScreen(
                             )
                             val combinedCookies = domainsToQuery.mapNotNull { cookieManager.getCookie(it) }.joinToString("; ")
 
-                            val hasAuth = NetscapeCookieWriter.hasAuthTokens(activeDomainKey, combinedCookies)
+                            val hasAuth = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.hasAuthTokens(activeDomainKey, combinedCookies)
                             if (hasAuth) {
                                 val liveUserAgent = webViewInstance?.settings?.userAgentString ?: ""
-                                val permissionManager = PermissionManager(context)
+                                val permissionManager = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager
                                 if (liveUserAgent.isNotBlank()) {
                                     permissionManager.saveUserAgentForDomain(activeDomainKey, liveUserAgent)
-                                    NetscapeCookieWriter.syncUserAgentToBackup(context, activeDomainKey, liveUserAgent)
+                                    (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.syncUserAgentToBackup(context, activeDomainKey, liveUserAgent)
                                 }
 
-                                val success = NetscapeCookieWriter.writeCookies(context, currentUrl, combinedCookies)
+                                val success = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.writeCookies(context, currentUrl, combinedCookies)
                                 if (success) {
                                     Toast.makeText(context, "Cookies saved for ${activeDomainKey.uppercase()}!", Toast.LENGTH_SHORT).show()
-                                    onCookiesSaved()
                                 } else {
                                     Toast.makeText(context, "Failed to format cookies.", Toast.LENGTH_SHORT).show()
                                 }
@@ -308,8 +307,8 @@ fun BrowserScreen(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
-                        val domainKey = NetscapeCookieWriter.getDomainKey(initialUrl)
-                        val domainUserAgent = UserAgentManager.getBrowserUserAgentForDomain(ctx, domainKey)
+                        val domainKey = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.getDomainKey(initialUrl)
+                        val domainUserAgent = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.userAgentManager.getBrowserUserAgentForDomain(ctx, domainKey)
 
                         settings.apply {
                             javaScriptEnabled = true
@@ -333,14 +332,14 @@ fun BrowserScreen(
 
                         val extractedUserAgent = settings.userAgentString
                         if (!extractedUserAgent.isNullOrBlank()) {
-                            UserAgentManager.saveUserAgentForDomain(ctx, activeDomainKey, extractedUserAgent)
+                            (context.applicationContext as com.videofetcher.VideoFetcherApp).container.userAgentManager.saveUserAgentForDomain(ctx, activeDomainKey, extractedUserAgent)
                         }
 
                         val cookieManager = CookieManager.getInstance()
                         cookieManager.setAcceptCookie(true)
                         cookieManager.setAcceptThirdPartyCookies(this, true)
 
-                        NetscapeCookieWriter.injectCookiesIntoCookieManager(ctx, initialUrl)
+                        (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.injectCookiesIntoCookieManager(ctx, initialUrl)
 
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {

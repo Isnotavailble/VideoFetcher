@@ -1,20 +1,23 @@
-package com.videofetcher
-
+package com.videofetcher.manager
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import androidx.core.content.edit
 import java.io.File
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * A helper class to manage persistent folder access permissions using SharedPreferences.
  * This is used for the Storage Access Framework (SAF) to allow file operations
  * even after the app has been reinstalled.
  */
-class PermissionManager(private val context: Context) {
+class PermissionManager(private val context: Context, private val userAgentManager: com.videofetcher.manager.UserAgentManager) {
 
-    private val prefs = context.getSharedPreferences("permission_prefs", Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences = context.getSharedPreferences("permission_prefs", Context.MODE_PRIVATE)
     private val key = "video_fetcher_folder_uri"
     
     private val customUriKey = "custom_folder_uri"
@@ -22,27 +25,36 @@ class PermissionManager(private val context: Context) {
     private val userAgentKey = "saved_user_agent"
 
     companion object {
-        val DEFAULT_USER_AGENT: String get() = com.videofetcher.cookies.UserAgentManager.DESKTOP_USER_AGENT
+        val DEFAULT_USER_AGENT: String = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
 
+    private val _resolutionSelectionEnabled = MutableStateFlow(isResolutionSelectionEnabled())
+    val resolutionSelectionEnabledFlow: StateFlow<Boolean> = _resolutionSelectionEnabled.asStateFlow()
+
+    private val _bypassSslEnabled = MutableStateFlow(isBypassSslEnabled())
+    val bypassSslEnabledFlow: StateFlow<Boolean> = _bypassSslEnabled.asStateFlow()
+
+    private val _bypassExtractorEnabled = MutableStateFlow(isBypassExtractorEnabled())
+    val bypassExtractorEnabledFlow: StateFlow<Boolean> = _bypassExtractorEnabled.asStateFlow()
+
     fun getEffectiveUserAgent(): String {
-        return com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, "")
+        return userAgentManager.getEffectiveUserAgentForDomain(context, "")
     }
 
     fun getUserAgentForDomain(domainKey: String): String {
-        return com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, domainKey)
+        return userAgentManager.getEffectiveUserAgentForDomain(context, domainKey)
     }
 
     fun saveUserAgentForDomain(domainKey: String, userAgent: String) {
-        com.videofetcher.cookies.UserAgentManager.saveUserAgentForDomain(context, domainKey, userAgent)
+        userAgentManager.saveUserAgentForDomain(context, domainKey, userAgent)
     }
 
     fun getUserAgent(): String {
-        return com.videofetcher.cookies.UserAgentManager.getEffectiveUserAgentForDomain(context, "")
+        return userAgentManager.getEffectiveUserAgentForDomain(context, "")
     }
 
     fun saveUserAgent(userAgent: String) {
-        com.videofetcher.cookies.UserAgentManager.saveUserAgentForDomain(context, "general", userAgent)
+        userAgentManager.saveUserAgentForDomain(context, "general", userAgent)
     }
 
     fun isResolutionSelectionEnabled(): Boolean {
@@ -51,6 +63,7 @@ class PermissionManager(private val context: Context) {
 
     fun setResolutionSelectionEnabled(enabled: Boolean) {
         prefs.edit { putBoolean("resolution_selection_enabled", enabled) }
+        _resolutionSelectionEnabled.value = enabled
     }
 
     fun isBypassSslEnabled(): Boolean {
@@ -59,6 +72,7 @@ class PermissionManager(private val context: Context) {
 
     fun setBypassSslEnabled(enabled: Boolean) {
         prefs.edit { putBoolean("bypass_ssl_certificate", enabled) }
+        _bypassSslEnabled.value = enabled
     }
 
     fun isBypassExtractorEnabled(): Boolean {
@@ -67,6 +81,7 @@ class PermissionManager(private val context: Context) {
 
     fun setBypassExtractorEnabled(enabled: Boolean) {
         prefs.edit { putBoolean("bypass_extractor_check", enabled) }
+        _bypassExtractorEnabled.value = enabled
     }
 
     /**

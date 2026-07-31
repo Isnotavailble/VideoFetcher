@@ -1,10 +1,24 @@
-package com.videofetcher
+package com.videofetcher.manager
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-object DownloadManager {
+class DownloadManager {
+    sealed class EngineState {
+        object Initializing : EngineState()
+        object Idle : EngineState()
+        data class Error(val message: String) : EngineState()
+    }
+
+    sealed class DownloadState {
+        object Queued : DownloadState()
+        data class Downloading(val progress: Float, val status: String) : DownloadState()
+        data class Success(val message: String) : DownloadState()
+        data class Error(val message: String) : DownloadState()
+        object Cancelled : DownloadState()
+    }
+
     private val _engineState = MutableStateFlow<EngineState>(EngineState.Initializing)
     val engineState: StateFlow<EngineState> = _engineState.asStateFlow()
 
@@ -47,7 +61,23 @@ object DownloadManager {
     private val _fileRefreshCounter = MutableStateFlow(0)
     val fileRefreshCounter: StateFlow<Int> = _fileRefreshCounter.asStateFlow()
 
+    // Tracks when the last internal (in-app) refresh was triggered
+    // Used by triggerExternalRefresh() to suppress ContentObserver events
+    // that are caused by the app's own MediaScannerConnection.scanFile() call
+    private var lastInternalRefreshTime = 0L
+
     fun triggerFileRefresh() {
+        lastInternalRefreshTime = System.currentTimeMillis()
         _fileRefreshCounter.value += 1
+    }
+
+    // Called exclusively by the ContentObserver in DownloaderViewModel.
+    // Suppresses the event if an internal refresh happened within the last 3 seconds
+    // to prevent double-render when the app's own download scan triggers the observer.
+    fun triggerExternalRefresh() {
+        val elapsed = System.currentTimeMillis() - lastInternalRefreshTime
+        if (elapsed > 3000L) {
+            _fileRefreshCounter.value += 1
+        }
     }
 }

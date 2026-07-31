@@ -1,8 +1,11 @@
-package com.videofetcher
+package com.videofetcher.manager
 
 import android.content.Context
 import android.content.SharedPreferences
 import org.json.JSONObject
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 // 1. The Data Model
 data class PausedDownload(
@@ -13,9 +16,12 @@ data class PausedDownload(
     val thumbnailUrl: String = ""
 )
 
-// 2. The Repository to manage SharedPreferences safely
-class PauseRepository(context: Context) {
+// 2. The Manager to manage SharedPreferences safely
+class PauseManager(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("paused_downloads_prefs", Context.MODE_PRIVATE)
+
+    private val _pausedDownloadsFlow = MutableStateFlow(getAllPausedDownloads())
+    val pausedDownloadsFlow: StateFlow<List<PausedDownload>> = _pausedDownloadsFlow.asStateFlow()
 
     // Save or Update a paused download
     fun savePausedDownload(download: PausedDownload) {
@@ -28,6 +34,7 @@ class PauseRepository(context: Context) {
         
         // The URL is the KEY, the JSON String is the VALUE
         prefs.edit().putString(download.url, json.toString()).apply()
+        _pausedDownloadsFlow.value = getAllPausedDownloads()
     }
 
     // Get a specific paused download by its URL
@@ -57,5 +64,6 @@ class PauseRepository(context: Context) {
     // Remove a download (call this when the user clicks Resume or clicks Cancel)
     fun removePausedDownload(url: String) {
         prefs.edit().remove(url).apply()
+        _pausedDownloadsFlow.value = getAllPausedDownloads()
     }
 }

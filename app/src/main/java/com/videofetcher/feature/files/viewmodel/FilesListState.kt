@@ -1,4 +1,4 @@
-package com.videofetcher
+package com.videofetcher.feature.files.viewmodel
 
 import android.net.Uri
 
@@ -9,7 +9,8 @@ data class DownloadedFileDetails(
     val signature: String, // like "(MP4 1080)" which helps duplication check, resolution change, signature, and standard card model
     val size: String,
     val duration: String,
-    val thumbnailUri: Uri // fast thumbnail caching, video preview
+    val thumbnailUriStr: String, // fast thumbnail caching, video preview
+    val isAudio: Boolean = false
 )
 
 sealed class FilesListState {

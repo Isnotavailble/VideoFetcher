@@ -1,4 +1,7 @@
-package com.videofetcher.cookies
+package com.videofetcher.feature.cookies
+import com.videofetcher.manager.UserAgentManager
+import com.videofetcher.manager.CookieDomainInfo
+import com.videofetcher.manager.PermissionManager
 
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -22,7 +25,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.videofetcher.PermissionManager
 import com.videofetcher.R
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -37,20 +39,20 @@ fun CookieManagementScreen(
     val context = LocalContext.current
     var refreshTrigger by remember { mutableStateOf(0) }
     val savedDomains = remember(refreshTrigger) {
-        NetscapeCookieWriter.getAllSavedCookieDomains(context)
+        (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.getAllSavedCookieDomains(context)
     }
 
     var domainToDelete by remember { mutableStateOf<CookieDomainInfo?>(null) }
     var showClearAllDialog by remember { mutableStateOf(false) }
     var isWarningVisible by remember { mutableStateOf(true) }
 
-    val permissionManager = remember { PermissionManager(context) }
+    val permissionManager = remember { (context.applicationContext as com.videofetcher.VideoFetcherApp).container.permissionManager }
     val folderPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) {
             permissionManager.saveCustomDownloadFolder(uri)
-            NetscapeCookieWriter.restoreFromSafTreeUri(context, uri)
+            (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.restoreFromSafTreeUri(context, uri)
             refreshTrigger++
         }
     }
@@ -83,15 +85,34 @@ fun CookieManagementScreen(
                     }
                 },
                 actions = {
-                    TextButton(onClick = { folderPickerLauncher.launch(null) }) {
-                        Text(
-                            text = "Restore",
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-                    if (savedDomains.isNotEmpty()) {
+                    if (savedDomains.isEmpty()) {
+                        TextButton(onClick = { folderPickerLauncher.launch(null) }) {
+                            Text(
+                                text = "Restore",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    } else {
+                        TextButton(onClick = {
+                            val (pulled, pushed) = (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.smartSyncCookies(context)
+                            val msg = when {
+                                pulled > 0 && pushed > 0 -> "Synced! Merged $pulled restored & backed up $pushed active cookies"
+                                pulled > 0 -> "Synced! Restored $pulled missing cookies"
+                                pushed > 0 -> "Synced! Backed up $pushed active cookies"
+                                else -> "Cookies synced"
+                            }
+                            android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                            refreshTrigger++
+                        }) {
+                            Text(
+                                text = "Sync",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
                         TextButton(onClick = { showClearAllDialog = true }) {
                             Text(
                                 text = "Clear All",
@@ -123,38 +144,51 @@ fun CookieManagementScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(12.dp)
                     ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_warning),
-                            contentDescription = "Warning",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_warning),
+                                    contentDescription = "Note",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Note",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            IconButton(
+                                onClick = { isWarningVisible = false },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Text(
+                                    text = "✕",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Please keep your cookie file private and do not share this file. This file contains login session of your account.",
+                            text = "Please reduce using Instagram and Facebook cookies as they belong to Meta. This app effectively downloads most videos without cookies — only use cookies when necessary. If you want to deactivate cookie usage for a platform, simply delete its cookie session below.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                             fontSize = 12.sp,
                             lineHeight = 16.sp
                         )
-                        IconButton(
-                            onClick = { isWarningVisible = false },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Text(
-                                text = "✕",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                            )
-                        }
                     }
                 }
             }
@@ -223,7 +257,7 @@ fun CookieManagementScreen(
                 TextButton(
                     onClick = {
                         val key = domainToDelete!!.domainKey
-                        NetscapeCookieWriter.deleteCookieFile(context, key)
+                        (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.deleteCookieFile(context, key)
                         Toast.makeText(context, "Deleted cookies for $key", Toast.LENGTH_SHORT).show()
                         domainToDelete = null
                         refreshTrigger++
@@ -251,7 +285,7 @@ fun CookieManagementScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        NetscapeCookieWriter.clearAllCookies(context)
+                        (context.applicationContext as com.videofetcher.VideoFetcherApp).container.cookieManager.clearAllCookies(context)
                         Toast.makeText(context, "All saved cookies cleared", Toast.LENGTH_SHORT).show()
                         showClearAllDialog = false
                         refreshTrigger++
