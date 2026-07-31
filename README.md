@@ -32,6 +32,11 @@ Using account cookies is entirely at your own risk. When cookies are attached, `
 VideoFetcher is made possible thanks to incredible open-source projects:
 * **[yt-dlp](https://github.com/yt-dlp/yt-dlp)**: The incredible open-source core powering all extractions.
 * **[YoutubeDL-Android](https://github.com/junkfood02/youtubedl-android)**: (by junkfood02) Provides the Android bindings and FFmpeg binaries.
+## 🤚 Limitations
+* **No playlist support:** The current version does not support downloading playlists. Only individual media URLs are supported.
+
+* **No custom yt-dlp options:** The app does not have a custom command option like other yt-dlp based projects. The app is designed to be simple and user-friendly, so there are not many advanced options.
+
 
 
 ## 🤝 Community Supported
