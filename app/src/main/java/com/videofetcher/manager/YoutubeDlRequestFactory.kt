@@ -18,14 +18,18 @@ class YoutubeDlRequestFactory(
      *                       Set to false for actual downloading
      */
     fun createRequest(url: String, context: Context, isMetadataOnly: Boolean): YoutubeDlRequestConfig {
-        val cleanUrl = try {
-            android.net.Uri.parse(url).buildUpon().clearQuery().build().toString()
-        } catch (e: Exception) {
+        val domainKey = cookieManager.getDomainKey(url)
+        val cleanUrl = if (domainKey.lowercase() == "instagram") {
             url
+        } else {
+            try {
+                android.net.Uri.parse(url).buildUpon().clearQuery().build().toString()
+            } catch (e: Exception) {
+                url
+            }
         }
         val request = YoutubeDLRequest(cleanUrl)
 
-        val domainKey = cookieManager.getDomainKey(cleanUrl)
         val platformCookieFile = cookieManager.getCookieFileForUrl(context, cleanUrl)
         val hasCookies = platformCookieFile != null
 
@@ -35,12 +39,19 @@ class YoutubeDlRequestFactory(
             request.addOption("--fragment-retries", "1")
         }
 
-        val effectiveUserAgent = userAgentManager.getEffectiveUserAgentForDomain(
-            context,
-            domainKey,
-            isAuthenticated = hasCookies
-        )
-        request.addOption("--user-agent", effectiveUserAgent)
+        // Only apply User-Agent for authenticated (cookie-backed) sessions.
+        // For unauthenticated requests, let yt-dlp use its own internal default UA,
+        // which is compatible with public extractors (e.g. Instagram public reels/posts).
+        // Forcing a Mobile UA on unauthenticated Instagram requests causes yt-dlp's
+        // extractor to treat the session as an app-client and return an empty media response.
+        if (hasCookies) {
+            val effectiveUserAgent = userAgentManager.getEffectiveUserAgentForDomain(
+                context,
+                domainKey,
+                isAuthenticated = true
+            )
+            request.addOption("--user-agent", effectiveUserAgent)
+        }
 
         // 1. Global Speed Optimizations
         request.addOption("--no-playlist")
