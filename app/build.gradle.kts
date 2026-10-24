@@ -91,6 +91,10 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.8"
     }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -110,4 +114,7 @@ dependencies {
     // YoutubeDL and FFmpeg dependencies
     implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
     implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
+
+    // Unit Testing
+    testImplementation("junit:junit:4.13.2")
 }
