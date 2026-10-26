@@ -8,6 +8,14 @@ class YoutubeDlRequestFactory(
     private val userAgentManager: UserAgentManager,
     private val permissionManager: PermissionManager
 ) {
+    companion object {
+        /**
+         * Cleans raw URL inputs by trimming whitespace without destroying query parameters
+         * needed by extractors (such as YouTube's ?v= or Facebook's parameters).
+         */
+        fun cleanUrl(url: String): String = url.trim()
+    }
+
     /**
      * Creates a pre-configured YoutubeDLRequest with all platform rules, cookies, 
      * User-Agents, and IPv4 settings automatically applied.
@@ -18,16 +26,8 @@ class YoutubeDlRequestFactory(
      *                       Set to false for actual downloading
      */
     fun createRequest(url: String, context: Context, isMetadataOnly: Boolean): YoutubeDlRequestConfig {
-        val domainKey = cookieManager.getDomainKey(url)
-        val cleanUrl = if (domainKey.lowercase() == "instagram") {
-            url
-        } else {
-            try {
-                android.net.Uri.parse(url).buildUpon().clearQuery().build().toString()
-            } catch (e: Exception) {
-                url
-            }
-        }
+        val cleanUrl = cleanUrl(url)
+        val domainKey = cookieManager.getDomainKey(cleanUrl)
         val request = YoutubeDLRequest(cleanUrl)
 
         val platformCookieFile = cookieManager.getCookieFileForUrl(context, cleanUrl)

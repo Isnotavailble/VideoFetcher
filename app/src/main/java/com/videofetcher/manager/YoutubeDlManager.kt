@@ -3,6 +3,7 @@ package com.videofetcher.manager
 import android.content.Context
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
+import com.yausername.youtubedl_android.mapper.VideoFormat
 import kotlinx.coroutines.delay
 import java.util.concurrent.TimeUnit
 
@@ -10,6 +11,53 @@ class YoutubeDlManager(
     private val requestFactory: YoutubeDlRequestFactory,
     private val cookieManager: CookieManager
 ) {
+    companion object {
+        /**
+         * Calculates the maximum effective video resolution height from available video formats,
+         * taking vertical videos and video codecs into account.
+         */
+        fun calculateMaxResolutionHeight(formats: List<VideoFormat>?): Int {
+            return formats
+                ?.filter { it.height > 0 && it.vcodec != "none" }
+                ?.maxOfOrNull { Math.min(it.width.coerceAtLeast(0), it.height) } ?: 0
+        }
+
+        /**
+         * Generates the resolution bucketing and audio options based on maximum available height.
+         */
+        fun extractAvailableFormats(rawMaxHeight: Int): List<String> {
+            val formats = mutableListOf<String>()
+            when {
+                rawMaxHeight >= 2160 -> formats.addAll(listOf("4K", "2K", "1080p", "720p", "480p"))
+                rawMaxHeight >= 1440 -> formats.addAll(listOf("2K", "1080p", "720p", "480p"))
+                rawMaxHeight >= 1000 -> formats.addAll(listOf("1080p", "720p", "480p", "360p"))
+                rawMaxHeight >= 720 -> formats.addAll(listOf("720p", "480p", "360p"))
+                rawMaxHeight >= 480 -> formats.addAll(listOf("480p", "360p"))
+                rawMaxHeight > 0 -> formats.add("360p")
+                else -> formats.add("Best Quality")
+            }
+            formats.add("Best Quality (M4A)")
+            formats.add("Audio (MP3) - High Quality")
+            formats.add("Audio (MP3) - Standard")
+            formats.add("Audio (MP3) - Fast")
+            return formats
+        }
+
+        /**
+         * Formats duration in milliseconds into "HH:MM:SS" or "MM:SS".
+         */
+        fun formatDuration(millis: Long): String {
+            val hours = TimeUnit.MILLISECONDS.toHours(millis)
+            val minutes = TimeUnit.MILLISECONDS.toMinutes(millis) % TimeUnit.HOURS.toMinutes(1)
+            val seconds = TimeUnit.MILLISECONDS.toSeconds(millis) % TimeUnit.MINUTES.toSeconds(1)
+            return if (hours > 0) {
+                String.format("%02d:%02d:%02d", hours, minutes, seconds)
+            } else {
+                String.format("%02d:%02d", minutes, seconds)
+            }
+        }
+    }
+
     suspend fun fetchVideoMetadata(url: String, context: Context): YoutubeVideoMetadata {
         val config = requestFactory.createRequest(url, context, isMetadataOnly = true)
         val request = config.request
@@ -39,25 +87,8 @@ class YoutubeDlManager(
         }
 
         // Resolution Bucketing (handles vertical videos securely)
-        val rawMaxHeight = info.formats
-            ?.filter { it.height > 0 && it.vcodec != "none" }
-            ?.maxOfOrNull { Math.min(it.width.coerceAtLeast(0), it.height) } ?: 0
-
-        val formats = mutableListOf<String>()
-        when {
-            rawMaxHeight >= 2160 -> formats.addAll(listOf("4K", "2K", "1080p", "720p", "480p"))
-            rawMaxHeight >= 1440 -> formats.addAll(listOf("2K", "1080p", "720p", "480p"))
-            rawMaxHeight >= 1000 -> formats.addAll(listOf("1080p", "720p", "480p", "360p"))
-            rawMaxHeight >= 720 -> formats.addAll(listOf("720p", "480p", "360p"))
-            rawMaxHeight >= 480 -> formats.addAll(listOf("480p", "360p"))
-            rawMaxHeight > 0 -> formats.add("360p")
-            else -> formats.add("Best Quality")
-        }
-        formats.add("Best Quality (M4A)")
-        formats.add("Audio (MP3) - High Quality")
-        formats.add("Audio (MP3) - Standard")
-        formats.add("Audio (MP3) - Fast")
-
+        val rawMaxHeight = calculateMaxResolutionHeight(info.formats)
+        val formats = extractAvailableFormats(rawMaxHeight)
         val durationStr = formatDuration((info.duration * 1000).toLong())
 
         return YoutubeVideoMetadata(
@@ -66,16 +97,5 @@ class YoutubeDlManager(
             thumbnailUrl = info.thumbnail ?: "",
             formats = formats
         )
-    }
-
-    private fun formatDuration(millis: Long): String {
-        val hours = TimeUnit.MILLISECONDS.toHours(millis)
-        val minutes = TimeUnit.MILLISECONDS.toMinutes(millis) % TimeUnit.HOURS.toMinutes(1)
-        val seconds = TimeUnit.MILLISECONDS.toSeconds(millis) % TimeUnit.MINUTES.toSeconds(1)
-        return if (hours > 0) {
-            String.format("%02d:%02d:%02d", hours, minutes, seconds)
-        } else {
-            String.format("%02d:%02d", minutes, seconds)
-        }
     }
 }
